@@ -14,8 +14,6 @@ from matplotlib import pyplot as plt
 #     update, fan neighborhoods, logging, all three experiments, all plots
 #
 # WHAT IS YOURS TO IMPLEMENT (marked with TODO, in suggested order):
-#   [1] boidsRules      - one-line-ish fix: exclude SELF from neighbor sets
-#   [2] fanLeaderRule   - the fanboids' unique rule 4: chase the captain
 #   [3] ackermannClamp  - turn-rate limit (minimum turning radius Rboid)
 #   [4] initClumped     - random clumped starts for the fan flock
 #   [5] fanFinalErrors  - (dx, dy, dist, dtheta) at the FINAL step only
@@ -171,36 +169,24 @@ def falconSteering(thetai, vxTotal, vyTotal, opts):
 
 
 # =========================================================================
-# TODO [3] -- ackermannClamp: the turn limit for ALL small boids
-# -------------------------------------------------------------------------
-# Point boids used to teleport their velocity vector to wherever the rule
-# kicks pointed: a 180-degree flip in one dt was legal. A car cannot do
-# that. Give distractors and fanboids a car-like constraint:
-#
-#   inputs : (vx, vy)      current velocities   [arrays, all small boids]
-#            (vxDes, vyDes) desired velocities  [current + kicks*dt]
-#   recipe : 1. desired speed  sDes = |vDes|; clamp s into
-#               [opts.minSpeed, opts.maxSpeed]
-#            2. current heading psi = atan2(vy, vx); desired heading
-#               psiDes = atan2(vyDes, vxDes)  (if sDes ~ 0, keep psi)
-#            3. max heading change this step: dpsiMax = (s/opts.Rboid)*dt
-#               <- this IS the constraint: heading rate <= speed/Rboid,
-#               curvature <= 1/Rboid. Since s >= minSpeed > 0, the boid
-#               must roll forward to turn: no spinning on the spot.
-#            4. dpsi = clip(wrapToPi(psiDes - psi), -dpsiMax, +dpsiMax)
-#            5. return s*cos(psi+dpsi), s*sin(psi+dpsi), and
-#               omega = dpsi/dt (logged for the smoothness analysis)
-#   Vectorize it: these are numpy arrays, no python loop needed.
-#
-# When it works: distractor traces in Fig 1 turn from jittery scribbles
-# into smooth loops/arcs, and the smoothness report shows |omega| capped
-# at s/Rboid instead of zeros.
+# Ackermann-style update for the small boids (distractors + fanboids)
 # =========================================================================
 def ackermannClamp(vx, vy, vxDes, vyDes, opts):
-    # --- placeholder: old holonomic behavior (speed clamp only, no turn
-    #     limit), omega reported as zero ---
-    vxNew, vyNew = clampSpeeds(vxDes, vyDes, opts)
-    return vxNew, vyNew, np.zeros_like(vxNew)
+    """Point boids used to teleport their velocity vector to wherever the
+    rule kicks pointed - a 180 in one dt was legal. A car cannot do that:
+    heading changes only at rate |omega| <= speed/Rboid, and since speed is
+    clamped >= minSpeed the boid must roll forward to turn - no spinning on
+    the spot. The kicks now shape a DESIRED velocity; this clamp limits how
+    far the actual velocity may swing toward it in one step.
+    Vectorized over all boids. Returns (vxNew, vyNew, omega)."""
+
+    sDes = np.hypot(vxDes, vyDes) # desired speed
+    psi = np.arctan2(vy, vx) # current heading
+    s = np.clip(sDes, opts.minSpeed, opts.maxSpeed)
+    dpsiMax = (s/opts.Rboid)*opts.dt # (holonomic) this IS the heading change constraint
+    dpsi = np.clip(wrapToPi(np.arctan2(vyDes, vxDes) - psi), -dpsiMax, +dpsiMax) # heading change this step
+    psiNew = psi + dpsi
+    return s*np.cos(psiNew), s*np.sin(psiNew), dpsi/opts.dt
 
 
 # =========================================================================
@@ -256,7 +242,8 @@ def initUniform(n, opts):
 # knots instead of confetti, and the sweep is honestly randomized.
 # =========================================================================
 def initClumped(n, opts):
-    # --- placeholder: fall back to uniform confetti ---
+    k= np.random.randint(1, min(3, n)+1)  # number of clumps
+    
     return initUniform(n, opts)
 
 
