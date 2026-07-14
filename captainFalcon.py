@@ -467,8 +467,39 @@ def fanChi2(run, opts):
 
 
 def flockFinalReport(run, opts):
-    # --- placeholder ---
-    print('--- Fanboid final-state report: TODO [7] not implemented yet ---')
+    # 1. Smoothness: Check the omega logs to see how hard they were cranking the wheel
+    omega = run['fanOmega']  # remember this is already the heading rate, not desired angle
+    rms_omega = np.sqrt(np.mean(omega**2)) # Root mean squared! That's a cool trick
+    max_omega = np.max(np.abs(omega)) # Maximum absolute value of the heading rate
+    
+    # Grab the final frame data for the flock
+    x = run['fanX'][-1]
+    y = run['fanY'][-1]
+    vx = run['fanVx'][-1]
+    vy = run['fanVy'][-1]
+    
+    # 2. Cohesion: How tight is the final cluster? (Average distance from their own center of mass)
+    cm_x, cm_y = np.mean(x), np.mean(y)
+    cohesion_dist = np.mean(np.hypot(x - cm_x, y - cm_y))
+    
+    # 3. Alignment: Are they all pointing the exact same way? (Standard deviation of headings)
+    headings = np.arctan2(vy, vx)
+    alignment_std = np.std(headings) 
+    
+    # 4. Separation: Did anyone crash? (Minimum distance between any two boids)
+    n = len(x)
+    min_sep = np.inf
+    for i in range(n):
+        for j in range(i + 1, n):
+            d = np.hypot(x[i] - x[j], y[i] - y[j])
+            if d < min_sep:
+                min_sep = d
+                
+    print('\n--- Fanboid Final-State Report ---')
+    print('Smoothness (Omega) : RMS = %.3f rad/s, Max = %.3f rad/s' % (rms_omega, max_omega))
+    print('Cohesion (Spread)  : Mean distance from center of mass = %.3f' % cohesion_dist)
+    print('Alignment (Heading): Std dev of headings = %.3f deg' % np.degrees(alignment_std))
+    print('Separation (Crash) : Minimum distance between boids = %.3f (Protected Range = %.1f)' % (min_sep, opts.PR))
 
 
 # =========================================================================
@@ -554,7 +585,7 @@ plt.axis('equal')
 plt.xlabel('x')
 plt.ylabel('y')
 plt.legend()
-plt.title('Captain Falcon & the Fanboids - "Show me your moves!"')
+plt.title('Captain Falcon & the Fanboids')
 
 dxE, dyE, dE, dthE = fanFinalErrors(runC)
 fig, ax = plt.subplots(1, 2, figsize=(11, 4.6))
@@ -616,24 +647,54 @@ chiPosStd = np.array([np.std(sweepPos[n])  for n in opts.fanSweepN])
 chiAngAvg = np.array([np.mean(sweepAng[n]) for n in opts.fanSweepN])
 chiAngStd = np.array([np.std(sweepAng[n])  for n in opts.fanSweepN])
 
-fig, ax = plt.subplots(1, 2, figsize=(11, 4.6))
+fig, ax = plt.subplots(figsize=(7, 5))
 
-# Left plot: split position and heading total error
-ax[0].errorbar(nArr, chiPosAvg, yerr=chiPosStd, fmt='o-', color='C0', capsize=3, label='Pos chi^2')
-ax[0].errorbar(nArr, chiAngAvg, yerr=chiAngStd, fmt='s-', color='C1', capsize=3, label='Heading chi^2')
-ax[0].set_xlabel('n fanboids')
-ax[0].set_ylabel('chi^2')
-ax[0].set_title('N vs chi^2 (dots = individual trials)')
-ax[0].legend()
+# Plot the split total errors on a single graph
+ax.errorbar(nArr, chiPosAvg, yerr=chiPosStd, fmt='o-', color='C0', capsize=3, label='Pos chi^2')
+ax.errorbar(nArr, chiAngAvg, yerr=chiAngStd, fmt='s-', color='C1', capsize=3, label='Heading chi^2')
+ax.set_xlabel('n fanboids')
+ax.set_ylabel('chi^2')
+ax.set_title('N vs chi^2 (Position and Heading)')
+ax.legend()
 
-# Right plot: reduced error per boid
-# Dividing position by 2N (since it has x and y) and heading by N
-ax[1].errorbar(nArr, chiPosAvg/(2*nArr), yerr=chiPosStd/(2*nArr), fmt='o-', color='C0', capsize=3, label='Pos (reduced)')
-ax[1].errorbar(nArr, chiAngAvg/(nArr), yerr=chiAngStd/(nArr), fmt='s-', color='C1', capsize=3, label='Heading (reduced)')
-ax[1].axhline(1.0, color='0.6', ls='--', lw=0.8)
-ax[1].set_xlabel('n fanboids')
-ax[1].set_ylabel('reduced chi^2')
-ax[1].set_title('Reduced: per-boid badness (1 = within tolerance)')
-ax[1].legend()
+# =========================================================================
+# 20-Fanboid Chaos Visualization
+# =========================================================================
+print('\n--- Generating 20-Fanboid Trajectory Map ---')
+
+# Run a single simulation with 20 fanboids
+runChaos = runSimulation(opts, wayPts, qi, nFan=20, seed=123) 
+
+plt.figure(figsize=(10, 6))
+plt.plot(refPath[:, 0], refPath[:, 1], 'b-', linewidth=2, label='Reference Dubins path')
+plt.plot(runChaos['x'], runChaos['y'], 'k--', linewidth=1.5, label='Captain Falcon')
+
+# Generate 20 unique colors
+cols20 = plt.cm.viridis(np.linspace(0.15, 0.9, 20))
+
+# Plot every single fanboid's path
+for b in range(20):
+    plt.plot(runChaos['fanX'][:, b], runChaos['fanY'][:, b], '-', color=cols20[b],
+             linewidth=0.8, zorder=1, label='Fanboids' if b == 0 else None)
+
+# Show where they spawned
+plt.plot(runChaos['fanX0'], runChaos['fanY0'], 'o', color='0.4', mfc='none',
+         markersize=6, label='Fan start clumps')
+
+# Draw their final heading arrows
+psiEndChaos = np.arctan2(runChaos['fanVy'][-1], runChaos['fanVx'][-1])
+plt.quiver(runChaos['fanX'][-1], runChaos['fanY'][-1],
+           2*np.cos(psiEndChaos), 2*np.sin(psiEndChaos),
+           color=cols20, angles='xy', scale_units='xy', scale=1, width=0.004)
+
+# Draw the goal
+plt.quiver(qf[0], qf[1], 5*np.cos(qf[2]), 5*np.sin(qf[2]),
+           color='r', angles='xy', scale_units='xy', scale=1)
+
+plt.axis('equal')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.legend()
+plt.title('20 Fanboids: Structural Bottleneck & Swarm Chaos')
 
 plt.show()
