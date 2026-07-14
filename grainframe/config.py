@@ -1,0 +1,57 @@
+"""All tunables in one place. Edit here, nowhere else."""
+from dataclasses import dataclass, field
+
+
+@dataclass
+class SimOptions:
+    # ---- Boids rule gains ----
+    TF: float = 2.0          # Turning factor (wall push strength)
+    VR: float = 8.0          # Visual range (how far they see neighbors)
+    PR: float = 2.5          # Protected range (crash avoidance zone)
+    CF: float = 0.8          # Cohesion factor (pull to group center)
+    SF: float = 5.0          # Separation factor (push away from close neighbors)
+    AF: float = 2.0          # Alignment factor (match group speed/heading)
+    maxSpeed: float = 2.0
+    minSpeed: float = 0.8
+    safetyF: float = 5.0     # Margin from the walls
+
+    # ---- Dubins vehicle (filled from saved_params CSV by load_dataset) ----
+    R: float = 5.0           # Falcon turning radius
+    v: float = 1.0           # Falcon speed
+    dt: float = 0.01         # timestep
+
+    # ---- Captain / navigation ----
+    N: int = 10              # number of distractor boids
+    leaderFactor: float = 1.0
+    falconBoidsWeight: float = 0.4
+    dAng: float = 0.005
+    collectRadius: float = 0.75   # bullseye size for goal
+    passWindow: float = 5.0
+    hysteresisSteps: float = 2.5  # hysteresis = hysteresisSteps * v * dt
+    seed: int = 8
+    tMaxPathFactor: float = 1.75  # tMax = factor * refLen / v + tMaxPad
+    tMaxPad: float = 10.0
+    maxClumps: int = 3            # random starting groups for fanboids
+
+    # Ackermann constraint: boid turn radius as fraction of Falcon's
+    RboidFactor: float = 0.5
+
+    # ---- Fanboid parameters ----
+    fanLeaderFactor: float = 1.0     # pull toward the captain
+    falconSeesFanboids: bool = False # keep captain unperturbed by default
+    nFanShowcase: int = 10
+    fanSweepN: tuple = (1, 2, 3, 5, 7, 12, 20)
+    fanTrials: int = 5
+    sigmaPos: float = 1.0            # pos error capture tolerance
+    sigmaTh: float = 1.0             # heading error capture tolerance
+
+    @property
+    def Rboid(self):
+        return self.RboidFactor * self.R
+
+    @property
+    def hysteresis(self):
+        return self.hysteresisSteps * self.v * self.dt
+
+    def tMax(self, refLen):
+        return self.tMaxPathFactor * refLen / self.v + self.tMaxPad
