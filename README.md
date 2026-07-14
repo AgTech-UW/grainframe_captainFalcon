@@ -20,9 +20,6 @@ experiments/           runnable scripts, one per experiment
   exp1_ab_distractors.py    baseline vs distractors A/B
   exp2_fanboids.py          fanboid showcase + final-pose error panels
   exp3_sweep_chaos.py       n vs chi^2 sweep + 20-fanboid chaos map
-  exp4_falcon_endpose.py    Falcon perturbed by the crowd; chi^2 = his end
-                            pose vs the goal pose (fanboid convoy vs
-                            random interferers)
 run_all.py             run everything (like the old monolithic script)
 captainFalcon.py       the original monolith, kept for reference
 ```
@@ -32,7 +29,7 @@ captainFalcon.py       the original monolith, kept for reference
 ```bash
 python run_all.py            # dataset 1
 python run_all.py 2          # dataset 2
-python experiments/exp4_falcon_endpose.py   # just one experiment
+exp1_ab_distractors.py       # just one experiment
 ```
 
 Tune parameters by editing `grainframe/config.py`, or in code:
@@ -48,8 +45,3 @@ apply_dataset(opts, data)
 arena = make_arena(data, opts)
 run = runSimulation(data, arena, opts, nFan=10)
 ```
-
-Notes vs the old script:
-- `opts.Rboid`, `opts.hysteresis`, and `tMax` are now derived properties.
-- CPA waypoint state moved from `opts.minDist` into a `WaypointTracker`,
-  so runs can't leak state into each other.
