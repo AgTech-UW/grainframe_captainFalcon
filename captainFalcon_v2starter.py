@@ -453,7 +453,8 @@ def runSimulation(opts, wayPts, qiPose, nDistract=0, nFan=0, seed=None):
         nSmall = nDistract + nFan # total number of small boids
         if nSmall > 0:
             # The frozen snapshot: distractors first, then fanboids.
-            xAll  = np.concatenate([xDis,  xFan])
+            # Combine the Distractors and the Fanboids into one big master list
+            xAll  = np.concatenate([xDis,  xFan]) 
             yAll  = np.concatenate([yDis,  yFan])
             vxAll = np.concatenate([vxDis, vxFan])
             vyAll = np.concatenate([vyDis, vyFan])
@@ -464,6 +465,7 @@ def runSimulation(opts, wayPts, qiPose, nDistract=0, nFan=0, seed=None):
             #       hold them off him. Distractors never see him -- so in
             #       the A/B experiment the flock stays an exogenous
             #       disturbance, replayable from the seed.
+            # special version of this list just for the Fanboids
             xAllF  = np.append(xAll,  xi)
             yAllF  = np.append(yAll,  yi)
             vxAllF = np.append(vxAll, v * np.cos(thetai))
@@ -476,20 +478,20 @@ def runSimulation(opts, wayPts, qiPose, nDistract=0, nFan=0, seed=None):
                 isFan = i >= nDistract   # fans sit after the distractors
 
                 if isFan:
-                    neighborhood = (xAllF, yAllF, vxAllF, vyAllF)  # sees captain
+                    neighborhood = (xAllF, yAllF, vxAllF, vyAllF)  # sees captain (fans only see each other + captain)
                 else:
-                    neighborhood = (xAll, yAll, vxAll, vyAll)      # doesn't
+                    neighborhood = (xAll, yAll, vxAll, vyAll)      # doesn't (distractors only see each other)
 
                 (fS_x, fS_y,
                  fA_x, fA_y,
                  fC_x, fC_y) = boidsRules(xAll[i], yAll[i], vxAll[i], vyAll[i],
-                                          *neighborhood, opts)
+                                          *neighborhood, opts) # calculate the forces
 
-                kx = fS_x + fA_x + fC_x
-                ky = fS_y + fA_y + fC_y
+                kx = fS_x + fA_x + fC_x # total kick in x
+                ky = fS_y + fA_y + fC_y # total kick in y
 
-                if isFan:
-                    kx4, ky4 = fanLeaderRule(xAll[i], yAll[i], xi, yi, opts)
+                if isFan: 
+                    kx4, ky4 = fanLeaderRule(xAll[i], yAll[i], xi, yi, opts) # fanboids also have a leader rule, and an additional kick
                     kx += kx4
                     ky += ky4
 
