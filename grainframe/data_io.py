@@ -20,8 +20,9 @@ class Dataset:
 
 def load_dataset(tag='1', dataDir=None):
     if dataDir is None:
-        # CSVs live in the repo root, one level above this package
-        dataDir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # CSVs live in the data/ folder at the repo root
+        repoRoot = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        dataDir = os.path.join(repoRoot, 'data')
 
     p = lambda name: os.path.join(dataDir, 'saved_%s_%s.csv' % (name, tag))
 
