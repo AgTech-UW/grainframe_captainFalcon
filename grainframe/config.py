@@ -45,6 +45,17 @@ class SimOptions:
     sigmaPos: float = 1.0            # pos error capture tolerance
     sigmaTh: float = 1.0             # heading error capture tolerance
 
+    # ---- Collision counting ----
+    bodyRadius: float = 0.5          # physical radius of each agent (a disk)
+    boidsSeeCaptain: bool = False    # if True, DISTRACTORS also get Cap in their
+                                     # neighbor list so they can avoid him
+                                     # (fanboids always see him regardless)
+
+    @property
+    def collisionRadius(self):
+        # Two disks touch when their centers are within the sum of radii = 2*r
+        return 2.0 * self.bodyRadius
+
     @property
     def Rboid(self):
         return self.RboidFactor * self.R

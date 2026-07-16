@@ -1,4 +1,7 @@
 """Experiment 1: the original A/B — baseline vs random distractors."""
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from matplotlib import pyplot as plt
 from grainframe import SimOptions, load_dataset, make_arena
