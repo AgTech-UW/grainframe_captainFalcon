@@ -116,22 +116,33 @@ def runSimulation(data, arena, opts, nDistract=0, nFan=0, seed=None):
             # ----- Pass 1: desired velocities (no movement yet) -----
             vxDes = np.empty(nSmall)
             vyDes = np.empty(nSmall)
+            
+            # Pre-calculate Captain's current velocity for the loop
+            vxCap = v * np.cos(thetai)
+            vyCap = v * np.sin(thetai)
 
             for i in range(nSmall):
                 isFan = i >= nDistract
+
                 if isFan:
                     neighborhood = (xAllF, yAllF, vxAllF, vyAllF)
                 else:
                     neighborhood = (xAll, yAll, vxAll, vyAll)
 
-                (fS_x, fS_y, fA_x, fA_y, fC_x, fC_y) = boidsRules(
-                    xAll[i], yAll[i], vxAll[i], vyAll[i], *neighborhood, opts)
+                (fS_x, fS_y,
+                 fA_x, fA_y,
+                 fC_x, fC_y) = boidsRules(xAll[i], yAll[i], vxAll[i], vyAll[i],
+                                          *neighborhood, opts)
 
                 kx = fS_x + fA_x + fC_x
                 ky = fS_y + fA_y + fC_y
 
                 if isFan:
-                    kx4, ky4 = fanLeaderRule(xAll[i], yAll[i], xi, yi, opts)
+                    # Pass the positions AND the velocities into the new rule
+                    kx4, ky4 = fanLeaderRule(
+                        xAll[i], yAll[i], vxAll[i], vyAll[i], 
+                        xi, yi, vxCap, vyCap, opts
+                    )
                     kx += kx4
                     ky += ky4
 

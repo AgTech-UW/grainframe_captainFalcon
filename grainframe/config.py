@@ -38,6 +38,7 @@ class SimOptions:
 
     # ---- Fanboid parameters ----
     fanLeaderFactor: float = 1.0     # pull toward the captain
+    fanLeaderVelocityFactor: float = 7.0  # match the captain's speed/heading
     falconSeesFanboids: bool = False # keep captain unperturbed by default
     nFanShowcase: int = 10
     fanSweepN: tuple = (1, 2, 3, 5, 7, 12, 20)

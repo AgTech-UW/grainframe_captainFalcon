@@ -60,13 +60,13 @@ def run(opts=None, data=None, show=False):
     report(collDis, opts, 'distractors avoiding Cap')
 
     # Trajectory maps
-    gp.plotBase(data, 'Exp 5: Cap unerring, fanboids avoid him')   # draw ref path + set up axes
+    gp.plotBase(data, 'Exp 4: Cap unerring, fanboids avoid him')   # draw ref path + set up axes
     gp.addFalcon(runFan, 'k--', 'Captain (unerring)')             # Cap's actual track
     gp.addFanboids(runFan)                                        # every fanboid's colored trail
     gp.addPose(data.qf, 'r')                                      # red arrow = goal pose
     plt.legend()
 
-    gp.plotBase(data, 'Exp 5: Cap unerring, distractors avoid him')
+    gp.plotBase(data, 'Exp 4: Cap unerring, distractors avoid him')
     gp.addFalcon(runDis, 'k--', 'Captain (unerring)')
     gp.addDistractors(runDis, label='Distractors (avoiding Cap)')  # grey distractor trails
     gp.addPose(data.qf, 'r')

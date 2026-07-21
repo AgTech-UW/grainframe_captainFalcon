@@ -39,12 +39,18 @@ def boidsRules(xb, yb, vxb, vyb, xAll, yAll, vxAll, vyAll, opts):
             float(vxCohesion),   float(vyCohesion))
 
 
-def fanLeaderRule(xb, yb, xCap, yCap, opts):
-    # Extra pull toward the Captain for fanboids
+def fanLeaderRule(xb, yb, vxb, vyb, xCap, yCap, vxCap, vyCap, opts):
+    # 1. Positional pull (Cohesion with the Captain)
     kx = (xCap - xb) * opts.fanLeaderFactor
     ky = (yCap - yb) * opts.fanLeaderFactor
-    return kx, ky
-
+    
+    # 2. Velocity matching (Alignment with the Captain)
+    # Note: Make sure to add 'fanLeaderVelocityFactor' to your opts class!
+    kvx = (vxCap - vxb) * opts.fanLeaderVelocityFactor
+    kvy = (vyCap - vyb) * opts.fanLeaderVelocityFactor
+    
+    # Return the combined forces
+    return kx + kvx, ky + kvy
 
 def falconSteering(thetai, vxTotal, vyTotal, opts):
     # Dubins car physics... straight, max-left, or max-right
