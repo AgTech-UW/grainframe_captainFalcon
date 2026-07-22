@@ -38,7 +38,6 @@ class SimOptions:
 
     # ---- Fanboid parameters ----
     fanLeaderFactor: float = 1.0     # pull toward the captain
-    fanLeaderVelocityFactor: float = 7.0  # match the captain's speed/heading
     falconSeesFanboids: bool = False # keep captain unperturbed by default
     nFanShowcase: int = 10
     fanSweepN: tuple = (1, 2, 3, 5, 7, 12, 20)
@@ -51,6 +50,23 @@ class SimOptions:
     boidsSeeCaptain: bool = False    # if True, DISTRACTORS also get Cap in their
                                      # neighbor list so they can avoid him
                                      # (fanboids always see him regardless)
+
+    # ---- Multi-fleet (two captains crossing) ----
+    capAvoidWeight: float = 2.0      # how hard a captain reacts when someone
+                                     # enters his protected range (0 = never dodge)
+    capPR: float = 12.0              # a captain's OWN protected range. Bigger than
+                                     # the boids' PR on purpose: a Dubins car with
+                                     # turn radius R needs ~sqrt(2*R*d) of runway to
+                                     # sidestep by d, so he must react EARLY.
+    capAvoidsOwnFans: bool = False   # should a captain dodge his own fanboids?
+                                     # False = his own fleet keeps clear of him,
+                                     # so he only reacts to OTHER fleets.
+    capSwirl: float = 1.2            # "rules of the road" tiebreaker: everyone
+                                     # also veers RIGHT when avoiding. Pure
+                                     # push-apart CANNOT solve a symmetric
+                                     # crossing (both agents get shoved along the
+                                     # same mirror line), so a consistent
+                                     # handedness is what actually breaks the tie.
 
     @property
     def collisionRadius(self):
