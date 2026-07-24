@@ -12,11 +12,7 @@ Adam's spec, verbatim-ish:
      squadrons -- everything dodges everything while trying to path-follow.
 
 We run each part two ways:
-  (a) PLAIN SAC  -- pure push-apart, exactly as written. Spoiler: on a
-      perfectly symmetric X this mirror-locks and they still collide, because
-      radial repulsion shoves both leaders along the same mirror line and can
-      never break the tie. (Verified: their trajectories stay exact mirror
-      images to machine precision.)
+  (a) PLAIN SAC  -- pure push-apart, exactly as written. 
   (b) RIGHT-OF-WAY -- same SAC push PLUS a small consistent veer-to-the-right
       while avoiding (capSwirl). A shared handedness breaks the symmetry and
       they pass cleanly, then settle back onto their own lines. Same reason
