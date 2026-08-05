@@ -37,9 +37,9 @@ from grainframe.dynamics import (boidsRules, falconSteering, ackermannClamp,
 # =====================================================================
 
 SEED  = 8            # change for a different random squadron layout
-N_FAN = 3            # fanboids per squadron
+N_FAN = 6            # fanboids per squadron
 
-GEOMETRY = 'cross'  # 'headon' = straight at each other on the same line
+GEOMETRY = 'headon'  # 'headon' = straight at each other on the same line
                      # 'cross'  = the X crossing at the origin
 
 HALF = 40.0          # how far from the middle each leader starts
@@ -132,8 +132,115 @@ STOP_LOOKAHEAD = 3200   # steps to roll forward when testing feasibility.
                         # "am I inside STOP_MARGIN right now".
 STOP_MARGIN    = 1.5    # stop if the best-case future gap stays below this
 
-FAN_SPREAD = 3.0     # how loosely each squadron spawns around its leader
-CIRCLE_R   = 2.5     # radius of the drawn COLLISION circles
+# ---------------------------------------------------------------------
+#  FANBOID SAFETY LAYER  (the swarm analogue of the leader stop, Sec 4.1)
+# ---------------------------------------------------------------------
+# A fanboid is an Ackermann point mass with turn radius Rboid and a speed
+# floor. When Rboid is large compared to the collision radius, STEERING alone
+# cannot resolve a close encounter -- no gain on the separation rule fixes a
+# kinematic impossibility, it just saturates the heading clamp. BRAKING is the
+# one authority that does not depend on turn radius, which is exactly the
+# argument the paper already makes for the leaders in Section 4.1.
+#
+# This runs AFTER boids + Ackermann, so it never touches the Reynolds rules:
+# separation/cohesion/alignment produce the velocity, this only decides how
+# much of it is executed this step.
+# Fans give leaders a WIDER berth than they give each other. A leader is a
+# constant-speed Dubins car that never yields (falconSeesFanboids = False), so
+# a fan that only reacts at the peer protected range has no runway. Braking is
+# also the wrong move against an oncoming leader -- you become a stationary
+# target -- so the brake below ignores leaders and only meters peer traffic.
+FAN_LEADER_PR = 9.0    # fan's separation range against the OTHER squad's leader.
+                       # Against its OWN leader a fan keeps the stock PR, or the
+                       # squadron just gets blown apart and stops being a squadron.
+
+# The leaders are the residual. A leader is a constant-speed Dubins car with
+# falconSeesFanboids = False and a repulsion term that only ever looks at the
+# OTHER LEADER, so it cannot yield to a fanboid at all -- the fan must do 100%
+# of the avoidance with turn radius Rboid against a collision radius of 1.0.
+# Two ways out, both switchable so the paper can report the cost of each:
+#   FAN_OWN_PR      -- fan-side only. Widen the fan's berth around its OWN
+#                      leader. Costs squadron cohesion, leaves leaders exact.
+#   LEADER_FAN_PR   -- leader-side. Give each leader a Khatib term against
+#                      fanboids. Costs cross-track error, i.e. it perturbs the
+#                      guidance result the paper is actually measuring.
+FAN_OWN_PR    = 5.0    # None -> stock opts.PR
+LEADER_FAN_PR = 0.0    # 0 -> leaders ignore fanboids entirely.
+                       # KEPT AT 0 BY DESIGN: a captain yields only to another
+                       # captain. Fanboids yield to captains, never the reverse.
+LEADER_FAN_GAIN = 8.0  # Khatib eta scale for the above
+
+# CORRIDOR CLEARING. Braking against a captain is measurably self-defeating --
+# a stopped fanboid in front of a constant-speed car that never yields is a
+# stationary target. This term instead pushes the fan SIDEWAYS out of the
+# captain's lane at full speed: get off the road rather than stop in it.
+# ---------------------------------------------------------------------
+#  RULES OF THE ROAD  (the tiebreaker -- config.capSwirl, never wired in here)
+# ---------------------------------------------------------------------
+# A symmetric head-on is unsolvable by repulsion alone. Both agents lie on the
+# mirror line, the repulsion points ALONG that line, and no gain breaks the
+# tie -- they just push each other backwards and lock. The fix is handedness:
+# everyone also veers consistently to one side.
+#
+# Implemented as a 90 degree CCW rotation of the repulsion vector in the WORLD
+# frame. Check it on the head-on case: Red at the origin heading +x sees Gold
+# at +d, so his repulsion is (-1,0) and rot90 gives (0,-1) -- he goes to his
+# own right. Gold's repulsion is (+1,0) and rot90 gives (0,+1) -- also his own
+# right. A starboard-to-starboard pass, which is what you want.
+SWIRL_LEADER = 0.8     # 0 = off (the old symmetric deadlock)
+SWIRL_FAN    = 0.8
+
+# A fully frozen pair is its own deadlock: two fans nose to nose both brake to
+# zero and neither ever moves again. The floor keeps everyone crawling so the
+# geometry can still resolve.
+BRAKE_FLOOR = 0.15
+
+USE_CORRIDOR = True
+CORR_RANGE = 12.0    # look this far up the captain's track
+CORR_HALF  = 4.5     # lane half-width to clear
+CORR_GAIN  = 60.0
+
+USE_FAN_BRAKE = True
+BRAKE_RANGE   = 3.0    # start easing off inside this gap
+BRAKE_STOP    = 1.4    # fully frozen at this gap (> collisionRadius = 1.0)
+
+# ---------------------------------------------------------------------
+#  SPAWN: deterministic formation, laid out in each leader's body frame
+# ---------------------------------------------------------------------
+# Random spawn was the wrong model. Boids started at random headings and random
+# speeds with a turn radius of Rboid, so the opening seconds were spent
+# untangling an arrangement nobody chose -- and occasionally starting already
+# inside the collision radius. A squadron forms up BEFORE it flies, so the
+# initial condition should be a formation, not a cloud.
+#
+# Slots are defined in the leader's body frame:  +x = the way he is pointing,
+# +y = his left. That makes the layout identical for 'headon' and 'cross'.
+#
+#   'vee'      classic wedge trailing behind the leader, alternating sides
+#   'echelon'  single diagonal line off one side
+#   'column'   single file directly astern
+#   'line'     abreast, one rank, leader centred
+#   'grid'     rows astern, FORM_COLS wide
+#   'ring'     evenly spaced all the way around him, at a random bearing
+FORMATION     = 'ring'
+FORM_SPACING  = 3.0    # gap between consecutive slots
+FORM_STANDOFF = 3.0    # gap from the leader to the first slot
+FORM_SWEEP    = 0.7    # vee/echelon: lateral offset per unit of trail
+FORM_COLS     = 3      # 'grid' only
+FORM_SIDE     = +1     # 'echelon' only: +1 = left, -1 = right
+
+# Each squadron's pattern gets its own random rotation about its captain, so
+# Red and Gold are NOT mirror images of each other. A symmetric setup is the
+# worst possible test case: mirrored agents get shoved along the same mirror
+# line and the tie never breaks, which is the same reason capSwirl exists for
+# the leaders. Rotating each squad independently kills that artefact.
+# Set to False for a fixed, fully deterministic layout.
+FORM_RANDOM_ROT = True
+FORM_JITTER   = 0.0    # optional gaussian noise on each slot. 0 = fully
+                       # deterministic, and note that with 0 the whole sim
+                       # stops depending on SEED at all -- if you want a seed
+                       # sweep again, this is the knob that gives you one.
+CIRCLE_R   = 3.0     # radius of the drawn COLLISION circles
 # =====================================================================
 
 RED, GOLD = 'crimson', 'goldenrod'
@@ -194,6 +301,18 @@ def fanSeparation(xb, yb, xOthers, yOthers, opts, range_=None):
             float(np.sum(dy[tooClose]) * opts.SF))
 
 
+def swirl(rx, ry, k):
+    """Add a consistent handedness to a repulsion vector.
+
+    Returns r + k * rot90(r). Scales with the repulsion itself, so it vanishes
+    the moment the repulsion does -- it can never push anybody around when
+    there is nothing to avoid.
+    """
+    if k == 0.0:
+        return rx, ry
+    return rx - k * ry, ry + k * rx
+
+
 def leaderRepulsion(xb, yb, xOthers, yOthers, opts, range_=None):
     """Leader-vs-leader repulsion ONLY. Not used by the fanboids.
 
@@ -219,7 +338,8 @@ def leaderRepulsion(xb, yb, xOthers, yOthers, opts, range_=None):
     eta = REP_GAIN * range_ ** 3 / 4.0
     w = eta * (1.0 / d - 1.0 / range_) / d ** 2   # magnitude
     ux, uy = dx[tooClose] / d, dy[tooClose] / d   # unit vector, away from them
-    return float(np.sum(w * ux)), float(np.sum(w * uy))
+    rx, ry = float(np.sum(w * ux)), float(np.sum(w * uy))
+    return swirl(rx, ry, SWIRL_LEADER)
 
 
 def canAvoid(x, y, th, xOther, yOther, thOther, opts):
@@ -251,6 +371,175 @@ def canAvoid(x, y, th, xOther, yOther, thOther, opts):
     yo = yOther + v * np.sin(thOther) * dt * n
 
     return float(np.min(np.hypot(xi - xo, yi - yo))) >= STOP_MARGIN
+
+
+def fanBrake(fanX, fanY, fanVx, fanVy, X, Y, TH, opts):
+    """Per-fanboid speed scale in [0, 1]: ease off when closing on somebody.
+
+    Returns a multiplier applied to the DISPLACEMENT only. The velocity state
+    itself is left alone so the heading stays well defined and the Ackermann
+    clamp keeps working normally on the next step -- same trick the leaders
+    use when they freeze.
+    """
+    n = fanX.size
+    lvx, lvy = opts.v * np.cos(TH), opts.v * np.sin(TH)
+
+    scale = np.ones(n)
+    for i in range(n):
+        # Peers AND both captains. Right of way is one-directional by design:
+        # a fanboid yields to any captain, a captain yields only to another
+        # captain (LEADER_FAN_PR = 0). Braking in front of a car that never
+        # yields is a genuine risk, which is why FAN_LEADER_PR also gives the
+        # fan a wide STEERING berth -- the brake is the last resort, not the
+        # first move.
+        px  = np.append(fanX,  X)
+        py  = np.append(fanY,  Y)
+        pvx = np.append(fanVx, lvx)
+        pvy = np.append(fanVy, lvy)
+        dx, dy = px - fanX[i], py - fanY[i]
+        d = np.hypot(dx, dy)
+        near = (d > 1e-9) & (d < BRAKE_RANGE)
+        if not np.any(near):
+            continue
+        # range rate along the line of sight; negative = closing
+        rdot = ((pvx[near] - fanVx[i]) * dx[near] +
+                (pvy[near] - fanVy[i]) * dy[near]) / d[near]
+        closing = rdot < 0.0
+        if not np.any(closing):
+            continue
+        dMin = float(d[near][closing].min())
+        s = (dMin - BRAKE_STOP) / (BRAKE_RANGE - BRAKE_STOP)
+        scale[i] = min(scale[i], float(np.clip(s, BRAKE_FLOOR, 1.0)))
+    return scale
+
+
+def corridorClear(fx, fy, X, Y, TH, opts):
+    """Sideways push out of a captain's lane.
+
+    Decompose the fan's offset from the captain into along-track (a) and
+    cross-track (c) in the captain's frame. If the fan is AHEAD (a > 0), inside
+    CORR_RANGE and inside the lane (|c| < CORR_HALF), push along the captain's
+    left/right normal, away from the centreline, hardest when dead centre.
+    """
+    gx = gy = 0.0
+    for k in range(2):
+        ux, uy = np.cos(TH[k]), np.sin(TH[k])
+        nx, ny = -uy, ux
+        dx, dy = fx - X[k], fy - Y[k]
+        a = dx * ux + dy * uy                    # along-track
+        c = dx * nx + dy * ny                    # cross-track
+        if a <= 0.0 or a > CORR_RANGE or abs(c) >= CORR_HALF:
+            continue
+        side = 1.0 if c >= 0 else -1.0           # exit the near side
+        if abs(c) < 1e-6:
+            side = 1.0                           # dead centre: consistent handedness
+        w = CORR_GAIN * (1.0 - abs(c) / CORR_HALF) * (1.0 - a / CORR_RANGE)
+        gx += w * side * nx
+        gy += w * side * ny
+    return gx, gy
+
+
+def formationSlots(n):
+    """Slot offsets (along, lateral) in the leader's body frame.
+
+    along < 0 is behind him, lateral > 0 is to his left.
+    """
+    if FORMATION == 'ring':
+        # Radius is whichever is larger: the requested standoff, or the radius
+        # at which n evenly spaced boids sit FORM_SPACING apart along the arc.
+        # That way tightening the ring can never spawn them on top of each
+        # other -- it just pushes the ring outward instead.
+        rMin = n * FORM_SPACING / (2.0 * np.pi)
+        rad = max(FORM_STANDOFF, rMin)
+        ang = 2.0 * np.pi * np.arange(n) / n
+        return [(rad * np.cos(a), rad * np.sin(a)) for a in ang]
+
+    slots = []
+    for j in range(n):
+        if FORMATION == 'vee':
+            rank = j // 2 + 1
+            side = 1.0 if j % 2 == 0 else -1.0
+            d = FORM_STANDOFF + (rank - 1) * FORM_SPACING
+            slots.append((-d, side * d * FORM_SWEEP))
+
+        elif FORMATION == 'echelon':
+            d = FORM_STANDOFF + j * FORM_SPACING
+            slots.append((-d, FORM_SIDE * d * FORM_SWEEP))
+
+        elif FORMATION == 'column':
+            slots.append((-(FORM_STANDOFF + j * FORM_SPACING), 0.0))
+
+        elif FORMATION == 'line':
+            rank = j // 2 + 1
+            side = 1.0 if j % 2 == 0 else -1.0
+            slots.append((-FORM_STANDOFF, side * rank * FORM_SPACING))
+
+        elif FORMATION == 'grid':
+            row, col = divmod(j, FORM_COLS)
+            # centre each row on the leader's track
+            lat = (col - (FORM_COLS - 1) / 2.0) * FORM_SPACING
+            slots.append((-(FORM_STANDOFF + row * FORM_SPACING), lat))
+
+        else:
+            raise ValueError('unknown FORMATION %r' % FORMATION)
+    return slots
+
+
+def spawnSquadrons(X, Y, TH, opts):
+    """Place each squadron in formation behind its leader, matched to his
+    heading and his speed.
+
+    Starting everyone aligned and at the leader's speed removes the opening
+    transient entirely: there is nothing to untangle, so whatever the collision
+    report shows afterwards is the encounter, not the initial condition.
+    """
+    slots = formationSlots(N_FAN)
+    fanX, fanY, fanVx, fanVy, squad = [], [], [], [], []
+
+    for k in range(2):
+        ux, uy = np.cos(TH[k]), np.sin(TH[k])     # forward
+        nx, ny = -uy, ux                          # left
+
+        # Independent random spin of this squadron's pattern about its captain.
+        # Note this only moves WHERE they stand: every fan still launches on
+        # the captain's heading at the captain's speed, so there is no opening
+        # transient regardless of how the pattern lands.
+        phi = np.random.uniform(0, 2 * np.pi) if FORM_RANDOM_ROT else 0.0
+        cphi, sphi = np.cos(phi), np.sin(phi)
+
+        for (along0, lat0) in slots:
+            along = along0 * cphi - lat0 * sphi
+            lat   = along0 * sphi + lat0 * cphi
+            px = X[k] + along * ux + lat * nx
+            py = Y[k] + along * uy + lat * ny
+            if FORM_JITTER > 0.0:
+                px += np.random.normal(0, FORM_JITTER)
+                py += np.random.normal(0, FORM_JITTER)
+            fanX.append(px)
+            fanY.append(py)
+
+        # everyone starts pointed the way the leader is pointed, at his speed
+        spd = float(np.clip(opts.v, opts.minSpeed, opts.maxSpeed))
+        fanVx.extend([spd * ux] * N_FAN)
+        fanVy.extend([spd * uy] * N_FAN)
+        squad.append(np.full(N_FAN, k))
+
+    fanX = np.array(fanX)
+    fanY = np.array(fanY)
+
+    # sanity: report the tightest pair at t=0 so a bad spacing is obvious
+    px = np.concatenate([fanX, X])
+    py = np.concatenate([fanY, Y])
+    gap = np.inf
+    for i in range(px.size):
+        for j in range(i + 1, px.size):
+            gap = min(gap, float(np.hypot(px[i] - px[j], py[i] - py[j])))
+    tag = '  <-- TOO TIGHT' if gap < opts.collisionRadius else ''
+    print('spawn: %s, %d per squad, random rot %s, tightest pair at t=0 = %.2f%s'
+          % (FORMATION, N_FAN, 'on' if FORM_RANDOM_ROT else 'off', gap, tag))
+
+    return (fanX, fanY, np.array(fanVx), np.array(fanVy),
+            np.concatenate(squad))
 
 
 def makePaths():
@@ -289,18 +578,7 @@ def run(plot=True):
     stopCount   = [0, 0]             # how many steps each spent frozen
 
     # Squadrons: N_FAN boids clumped near each leader's start
-    fanX, fanY, fanVx, fanVy, squad = [], [], [], [], []
-    for k in range(2):
-        fanX.append(X[k] + np.random.normal(0, FAN_SPREAD, N_FAN))
-        fanY.append(Y[k] + np.random.normal(0, FAN_SPREAD, N_FAN))
-        ang = np.random.uniform(0, 2 * np.pi, N_FAN)
-        spd = np.random.uniform(opts.minSpeed, opts.maxSpeed, N_FAN)
-        fanVx.append(spd * np.cos(ang))
-        fanVy.append(spd * np.sin(ang))
-        squad.append(np.full(N_FAN, k))
-    fanX, fanY   = np.concatenate(fanX),  np.concatenate(fanY)
-    fanVx, fanVy = np.concatenate(fanVx), np.concatenate(fanVy)
-    squad = np.concatenate(squad)
+    fanX, fanY, fanVx, fanVy, squad = spawnSquadrons(X, Y, TH, opts)
 
     dt, v = opts.dt, opts.v
     log = {'x': [[], []], 'y': [[], []], 'fanX': [], 'fanY': []}
@@ -344,6 +622,19 @@ def run(plot=True):
             vx += sx
             vy += sy
 
+            # --- optional term 3: dodge fanboids (off by default) ---
+            if LEADER_FAN_PR > 0.0:
+                fdx = X[k] - fanX
+                fdy = Y[k] - fanY
+                fD = np.hypot(fdx, fdy)
+                m = (fD > 1e-9) & (fD <= LEADER_FAN_PR)
+                if np.any(m):
+                    d = np.clip(fD[m], 0.25, None)
+                    eta = LEADER_FAN_GAIN * LEADER_FAN_PR ** 3 / 4.0
+                    w = eta * (1.0 / d - 1.0 / LEADER_FAN_PR) / d ** 2
+                    vx += float(np.sum(w * fdx[m] / d))
+                    vy += float(np.sum(w * fdy[m] / d))
+
             # --- bang-bang Dubins steering toward the summed vector ---
             vTh = falconSteering(TH[k], vx, vy, opts)
 
@@ -384,10 +675,25 @@ def run(plot=True):
                 fanX[i], fanY[i], fanVx[i], fanVy[i],
                 sameX, sameY, sameVx, sameVy, opts)
 
-            # separation against everyone, both squadrons and both leaders
-            everyX = np.append(fanX, X)
-            everyY = np.append(fanY, Y)
-            sX, sY = fanSeparation(fanX[i], fanY[i], everyX, everyY, opts)
+            # separation against other fanboids at the stock protected range,
+            # and against the two leaders at a wider one (FAN_LEADER_PR).
+            other = 1 - k
+            sX, sY = fanSeparation(fanX[i], fanY[i], fanX, fanY, opts)
+            oX, oY = fanSeparation(fanX[i], fanY[i], X[k:k+1], Y[k:k+1], opts,
+                                   range_=FAN_OWN_PR)
+            wX, wY = fanSeparation(fanX[i], fanY[i],
+                                   X[other:other+1], Y[other:other+1], opts,
+                                   range_=FAN_LEADER_PR)
+            sX += oX + wX
+            sY += oY + wY
+            # handedness applied to the SUM, so the Reynolds rule above is
+            # still bit-for-bit stock -- this is an added term, not an edit
+            sX, sY = swirl(sX, sY, SWIRL_FAN)
+
+            if USE_CORRIDOR:
+                cx, cy = corridorClear(fanX[i], fanY[i], X, Y, TH, opts)
+                sX += cx
+                sY += cy
 
             # pull toward MY leader only
             lX = (X[k] - fanX[i]) * opts.fanLeaderFactor
@@ -397,8 +703,10 @@ def run(plot=True):
             vyDes[i] = fanVy[i] + (sY + aY + cY + lY) * dt
 
         fanVx, fanVy, _ = ackermannClamp(fanVx, fanVy, vxDes, vyDes, opts)
-        fanX = fanX + fanVx * dt
-        fanY = fanY + fanVy * dt
+        gate = (fanBrake(fanX, fanY, fanVx, fanVy, X, Y, TH, opts)
+                if USE_FAN_BRAKE else 1.0)
+        fanX = fanX + fanVx * gate * dt
+        fanY = fanY + fanVy * gate * dt
 
         # ------------------------- commit + log -------------------------
         for k in range(2):

@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 class SimOptions:
     # ---- Boids rule gains ----
     TF: float = 2.0          # Turning factor (wall push strength)
-    VR: float = 10.0          # Visual range (how far they see neighbors)
-    PR: float = 7.5         # Protected range (crash avoidance zone)
-    CF: float = 0.2          # Cohesion factor (pull to group center)
-    SF: float = 5.0          # Separation factor (push away from close neighbors)
+    VR: float = 8.0          # Visual range (how far they see neighbors)
+    PR: float = 5.0         # Protected range (crash avoidance zone)
+    CF: float = 0.8          # Cohesion factor (pull to group center)
+    SF: float = 10.0          # Separation factor (push away from close neighbors)
     AF: float = 2.0          # Alignment factor (match group speed/heading)
     maxSpeed: float = 2.0
     minSpeed: float = 0.8
