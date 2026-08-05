@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 class SimOptions:
     # ---- Boids rule gains ----
     TF: float = 2.0          # Turning factor (wall push strength)
-    VR: float = 8.0          # Visual range (how far they see neighbors)
-    PR: float = 2.5          # Protected range (crash avoidance zone)
-    CF: float = 0.8          # Cohesion factor (pull to group center)
+    VR: float = 10.0          # Visual range (how far they see neighbors)
+    PR: float = 7.5         # Protected range (crash avoidance zone)
+    CF: float = 0.2          # Cohesion factor (pull to group center)
     SF: float = 5.0          # Separation factor (push away from close neighbors)
     AF: float = 2.0          # Alignment factor (match group speed/heading)
     maxSpeed: float = 2.0
@@ -34,7 +34,7 @@ class SimOptions:
     maxClumps: int = 3            # random starting groups for fanboids
 
     # Ackermann constraint: boid turn radius as fraction of Falcon's
-    RboidFactor: float = 0.5
+    RboidFactor: float = 1
 
     # ---- Fanboid parameters ----
     fanLeaderFactor: float = 1.0     # pull toward the captain
@@ -75,7 +75,7 @@ class SimOptions:
 
     @property
     def Rboid(self):
-        return self.RboidFactor * self.R
+        return self.RboidFactor * self.R # this is the boid turn radius, which is smaller than the Falcon's
 
     @property
     def hysteresis(self):
