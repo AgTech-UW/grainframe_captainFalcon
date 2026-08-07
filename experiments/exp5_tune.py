@@ -108,6 +108,19 @@ SWEEPS = {
         why='Distance at which cohesion and alignment switch back on after a '
             'pass. Currently None, i.e. opts.VR = 8.0. The measured failure is '
             'post-pass re-formation, so this is the primary suspect.'),
+    # --- the pull-vs-separation ratio. This is where the evidence points. ---
+    # Flat Reynolds separation is F = SF*d, which SHRINKS to zero at contact.
+    # The slot pull is fanLeaderFactor*(distance to slot) and does not shrink.
+    # Inside d = k*L/SF the pull wins and keeps winning, so a wingman that
+    # drifts inside is drawn all the way in. These four govern that balance
+    # and none of them were in the earlier 2820-run sweep, which is why it
+    # found nothing.
+    'SLOT_PULL_CAP': dict(
+        values=[1.0, 2.0, 4.0, 8.0, 1e9],
+        labels=['1', '2', '4', '8', 'none'],
+        why='Ceiling on the slot pull magnitude. Directly tests whether the '
+            'ratio is what traps wingmen against their own captain. 1e9 is '
+            'effectively uncapped, i.e. current behaviour.'),
     'BRAKE_RANGE': dict(
         values=[2.0, 3.0, 4.0, 5.0, 6.0, 8.0],
         why='Two wingmen closing at maxSpeed 2.0 each have a 4.0 closing '
@@ -140,6 +153,14 @@ SWEEPS = {
         values=[6.0, 7.0, 8.0, 10.0, 12.0],
         why='Spawn separation. Must exceed opts.PR (5.0). Larger values need '
             'a wider band, which the spawn auto-expands to provide.'),
+    'fanLeaderFactor': dict(
+        values=[0.25, 0.5, 1.0, 2.0],
+        why='Strength of the slot pull. Lower means separation wins at a '
+            'shorter distance, but also a looser formation.'),
+    'SF': dict(
+        values=[5.0, 10.0, 20.0, 40.0],
+        why='Separation strength. Raising it moves the balance point inward, '
+            'but cannot fix the profile: the force still vanishes at contact.'),
     'SPAWN_ARC': dict(
         values=[np.deg2rad(a) for a in (40, 60, 80, 100, 120)],
         labels=['40', '60', '80', '100', '120'],
@@ -170,8 +191,11 @@ def _writer(path, mode):
     return f, w
 
 
-def _run(param, value, label, split, nFan, seed, geometry, guidance):
-    ov = {param: value} if param else {}
+def _run(param, value, label, split, nFan, seed, geometry, guidance,
+         overrides=None):
+    ov = dict(overrides) if overrides else {}
+    if param:
+        ov[param] = value
     try:
         row = runOne(geometry, guidance, nFan, seed, overrides=ov)
     except Exception as exc:
@@ -305,6 +329,95 @@ def capacity(geometry, guidance, sizes, threshold, dryRun=False,
                      (el / i) * (len(jobs) - i) / 60.0))
     print('\nwrote %s' % CAPCSV)
     reportCapacity(threshold)
+
+
+GRIDCSV = os.path.join(OUTDIR, 'exp5_grid.csv')
+
+
+def grid(sizes, prValues, ratios, nSeeds, geometry, guidance, dryRun=False,
+         resume=False):
+    """2-D sweep over protected range and the slot-spacing RATIO.
+
+    Spacing is swept as a multiple of PR rather than as an absolute, because
+    the constraint that matters is relational: slot spacing must exceed the
+    protected range or adjacent slots sit inside one another's protected zone
+    and the formation is self-repelling. Sweeping them independently wastes
+    most of the grid on configurations that are broken by construction, and
+    makes the one real relationship hard to see.
+
+    Spawn separation is tied to spacing for the same reason.
+    """
+    os.makedirs(OUTDIR, exist_ok=True)
+    jobs = [(n, pr, r, s)
+            for n in sizes for pr in prValues for r in ratios
+            for s in HOLDOUT_SEEDS[:nSeeds]]
+    print('grid: PR %s x spacing ratio %s x sizes %s' % (prValues, ratios, sizes))
+    print('  %d cells x %d seeds = %d runs' %
+          (len(sizes) * len(prValues) * len(ratios), nSeeds, len(jobs)))
+
+    if resume:
+        done = _doneKeys(GRIDCSV, lambda r: (int(r['nFan']), r['label'],
+                                             int(r['seed'])))
+        jobs = [j for j in jobs
+                if (j[0], 'PR%g_x%g' % (j[1], j[2]), j[3]) not in done]
+        print('  %d remaining after resume' % len(jobs))
+    print('  about %.0f minutes (%.1f hours)'
+          % (len(jobs) * 7.0 / 60.0, len(jobs) * 7.0 / 3600.0))
+    if dryRun:
+        print('\n--dry-run: nothing executed')
+        return
+    if not jobs:
+        print('nothing to do')
+        return
+
+    f, w = _writer(GRIDCSV, 'a' if (resume and os.path.exists(GRIDCSV)) else 'w')
+    t0 = time.time()
+    with f:
+        for i, (n, pr, ratio, s) in enumerate(jobs, 1):
+            spacing = pr * ratio
+            ov = {'PR': pr, 'VR': max(8.0, pr),
+                  'SLOT_SPACING': spacing, 'SPAWN_MIN_SEP': spacing,
+                  'SLOT_MIN_R': max(8.0, pr)}
+            row = _run(None, None, 'PR%g_x%g' % (pr, ratio), 'holdout',
+                       n, s, geometry, guidance, overrides=ov)
+            row['mode'] = 'grid'
+            w.writerow(row)
+            f.flush()
+            el = time.time() - t0
+            print('[%4d/%4d] n=%-3d PR=%-5.1f x%-4.2f seed=%-5d hits=%-3s '
+                  'ETA %.0fm' % (i, len(jobs), n, pr, ratio, s,
+                                 row.get('totalCollisions', '-'),
+                                 (el / i) * (len(jobs) - i) / 60.0))
+    print('\nwrote %s' % GRIDCSV)
+    reportGrid()
+
+
+def reportGrid():
+    rows = _read(GRIDCSV)
+    if not rows:
+        sys.exit('no grid results')
+    sizes = sorted(set(int(r['nFan']) for r in rows))
+    labels = sorted(set(r['label'] for r in rows))
+    print('\nP(collision) by PR and spacing ratio, holdout seeds')
+    for n in sizes:
+        print('\n  nFan = %d' % n)
+        prs = sorted(set(float(L.split('_')[0][2:]) for L in labels))
+        rts = sorted(set(float(L.split('_x')[1]) for L in labels))
+        print('    PR \\ ratio  ' + '  '.join('%6.2f' % r for r in rts))
+        for pr in prs:
+            cells = []
+            for rt in rts:
+                lab = 'PR%g_x%g' % (pr, rt)
+                c = [r for r in rows
+                     if int(r['nFan']) == n and r['label'] == lab]
+                if not c:
+                    cells.append('     -')
+                    continue
+                k = sum(1 for r in c if r['totalCollisions'] > 0)
+                cells.append('%6.2f' % (k / len(c)))
+            print('    %8.1f    %s' % (pr, '  '.join(cells)))
+    print('\n  ratio = SLOT_SPACING / PR. Values at or below 1.0 are '
+          'self-repelling\n  by construction and should be visibly worse.')
 
 
 def _read(path):
@@ -501,7 +614,7 @@ def figures():
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('mode', choices=['sensitivity', 'capacity', 'figures',
-                                     'report'])
+                                     'report', 'grid', 'gridreport'])
     ap.add_argument('--nFan', type=int, default=6)
     ap.add_argument('--geometry', default='headon')
     ap.add_argument('--guidance', default='vfield')
@@ -509,6 +622,10 @@ if __name__ == '__main__':
                     help='comma-separated subset; default is all of them')
     ap.add_argument('--sizes', default='2,3,4,6,8,10,12')
     ap.add_argument('--threshold', type=float, default=0.10)
+    ap.add_argument('--prs', default='8,10,13,16,20',
+                    help='protected range values for the grid')
+    ap.add_argument('--ratios', default='1.0,1.25,1.5,2.0',
+                    help='SLOT_SPACING / PR ratios for the grid')
     ap.add_argument('--dry-run', dest='dryRun', action='store_true',
                     help='print the grid and the time estimate, run nothing')
     ap.add_argument('--resume', action='store_true',
@@ -538,6 +655,15 @@ if __name__ == '__main__':
         sizes = [int(s) for s in args.sizes.split(',')]
         capacity(args.geometry, args.guidance, sizes, args.threshold,
                  dryRun=args.dryRun, resume=args.resume)
+    elif args.mode == 'grid':
+        matplotlib.use('Agg')
+        grid([int(s) for s in args.sizes.split(',')],
+             [float(v) for v in args.prs.split(',')],
+             [float(v) for v in args.ratios.split(',')],
+             args.nHold, args.geometry, args.guidance,
+             dryRun=args.dryRun, resume=args.resume)
+    elif args.mode == 'gridreport':
+        reportGrid()
     elif args.mode == 'report':
         reportCapacity(args.threshold)
     else:

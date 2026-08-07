@@ -20,7 +20,7 @@ import numpy as np
 def flockStep(fanX, fanY, fanVx, fanVy, squad, leadX, leadY, leadTh, opts,
               sepOnlyOnEncounter=True, encounterRange=None,
               slotAlong=None, slotLateral=None,
-              swirl=0.0, swirlHeadOnOnly=True):
+              swirl=0.0, swirlHeadOnOnly=True, slotPullCap=None):
     """Desired velocities for every fanboid, one squadron-aware pass.
 
     fanX/fanY/fanVx/fanVy : flat arrays over ALL fanboids, every squadron
@@ -109,8 +109,8 @@ def flockStep(fanX, fanY, fanVx, fanVy, squad, leadX, leadY, leadTh, opts,
         use = prot & headOn
         # rotate 90 degrees in the world frame: (x, y) -> (-y, x). The sign
         # convention is checked on the canonical case in avoidance.swirl().
-        sepX = np.where(use, sepX + swirl * (dy * prot), sepX)
-        sepY = np.where(use, sepY + swirl * (-dx * prot), sepY)
+        sepX = np.where(use, sepX + swirl * (-dy * prot), sepX)
+        sepY = np.where(use, sepY + swirl * (dx * prot), sepY)
 
     sX = np.sum(sepX, axis=1) * opts.SF
     sY = np.sum(sepY, axis=1) * opts.SF
@@ -155,6 +155,33 @@ def flockStep(fanX, fanY, fanVx, fanVy, squad, leadX, leadY, leadTh, opts,
         ty = leadY[squad] + slotAlong * uy + slotLateral * ux
     lX = (tx - fanX) * opts.fanLeaderFactor
     lY = (ty - fanY) * opts.fanLeaderFactor
+
+    # --- cap the slot pull so it cannot outgun separation at close range ---
+    #
+    # The flat Reynolds separation is F = SF * d: it SHRINKS as agents close,
+    # reaching zero at contact. The slot pull is fanLeaderFactor * (distance
+    # to slot) and does NOT shrink -- a wingman 20 from its slot is pulled at
+    # 20 regardless of what it is about to hit.
+    #
+    # Setting the two equal gives the balance distance: SF*d = k*L, so
+    # d = k*L/SF. Outside it separation wins; INSIDE it separation is weaker
+    # and keeps weakening, so anything that crosses is drawn all the way in.
+    # It behaves as a trapdoor rather than a collision. Measured: a wingman
+    # reached 0.15 of its own captain, where separation was 1.5 against a slot
+    # pull of about 20.
+    #
+    # Note this got WORSE when slot spacing was scaled up, because larger
+    # spacing means larger typical slot distances and therefore a larger pull.
+    # The capacity fix created this.
+    #
+    # A cap is a blunt instrument -- the principled fix is a separation profile
+    # that grows at contact (Reynolds' 1/r weighting) -- but it is a direct
+    # test of whether the ratio is really what is trapping them.
+    if slotPullCap is not None:
+        mag = np.hypot(lX, lY)
+        scale = np.where(mag > slotPullCap,
+                         slotPullCap / np.where(mag > 1e-9, mag, 1.0), 1.0)
+        lX, lY = lX * scale, lY * scale
 
     dt = opts.dt
     return (fanVx + (sX + aX + cX + lX) * dt,
