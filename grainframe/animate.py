@@ -30,7 +30,8 @@ class Track:
 
 
 def animate_tracks(tracks, dt=0.01, frameSkip=25, tail=400, title='',
-                   subtitleFn=None, refPaths=None, save=None, fps=20):
+                   subtitleFn=None, refPaths=None, save=None, fps=20,
+                   blit=True):
     """Play back a list of Track objects.
 
     tracks     : list of Track
@@ -44,6 +45,10 @@ def animate_tracks(tracks, dt=0.01, frameSkip=25, tail=400, title='',
     save       : optional filename ('foo.gif' or 'foo.mp4') to write instead of
                  (or as well as) showing
     fps        : frames per second when saving
+    blit       : redraw only the artists that changed instead of the whole
+                 canvas. This is the difference between ~15 fps and smooth
+                 playback with a dozen-odd tracks. Pass blit=False if you are
+                 debugging and want a plain full redraw.
 
     Returns the FuncAnimation (keep a reference or playback stops).
     """
@@ -66,7 +71,12 @@ def animate_tracks(tracks, dt=0.01, frameSkip=25, tail=400, title='',
                          alpha=0.9 if tr.size >= 8 else 0.3, zorder=5)
         dots.append(dot)
         trails.append(trail)
-    clock = ax.set_title(title)
+    ax.set_title(title)
+    # The live readout must be an artist INSIDE the axes: blitting only
+    # repaints the axes bbox, and a figure/axes TITLE sits outside it, so a
+    # set_title() clock would either never update or force a full redraw.
+    clock = ax.text(0.01, 0.99, '', transform=ax.transAxes, va='top',
+                    ha='left', fontsize=9, zorder=10)
 
     # fixed axes so the view doesn't jump
     allX = np.concatenate([tr.x[:T] for tr in tracks])
@@ -85,14 +95,14 @@ def animate_tracks(tracks, dt=0.01, frameSkip=25, tail=400, title='',
         for tr, dot, trail in zip(tracks, dots, trails):
             dot.set_data([tr.x[t]], [tr.y[t]])
             trail.set_data(tr.x[t0:t + 1], tr.y[t0:t + 1])
-        txt = title
-        if subtitleFn is not None:
-            txt = (title + '\n' if title else '') + subtitleFn(t)
-        clock.set_text(txt)
-        return dots + trails
+        clock.set_text(subtitleFn(t) if subtitleFn is not None else '')
+        return dots + trails + [clock]
 
+    # cache_frame_data=False: FuncAnimation otherwise retains every frame's
+    # returned artists for the whole run, which on a few hundred frames is a
+    # steady memory climb and a slow drift in playback rate.
     anim = FuncAnimation(fig, update, frames=frames, interval=1000 // fps,
-                         blit=False)
+                         blit=blit, cache_frame_data=False)
 
     if save:
         if save.endswith('.gif'):

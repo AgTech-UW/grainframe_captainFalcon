@@ -39,7 +39,7 @@ from grainframe.dynamics import (falconSteering, ackermannClamp,
 SEED  = 8            # change for a different random squadron layout
 N_FAN = 3            # fanboids per squadron
 
-GEOMETRY = 'headon'  # 'headon' = straight at each other on the same line
+GEOMETRY = 'cross'   # 'headon' = straight at each other on the same line
                      # 'cross'  = the X crossing at the origin
 
 HALF = 40.0          # how far from the middle each leader starts
@@ -132,26 +132,6 @@ STOP_LOOKAHEAD = 3200   # steps to roll forward when testing feasibility.
                         # "am I inside STOP_MARGIN right now".
 STOP_MARGIN    = 1.5    # stop if the best-case future gap stays below this
 
-# ---------------------------------------------------------------------
-#  RULE PRIORITY DURING AN ENCOUNTER
-# ---------------------------------------------------------------------
-# Cross-squad coupling is already separation-only: cohesion and alignment are
-# fed same-squad neighbours only. The counter-productive term is the fan's OWN
-# squadron. While the squads interpenetrate, cohesion pulls each fan back to
-# its squadmates' centre of mass and alignment pulls its heading back to the
-# squad average -- both of which point straight back into the lane it is
-# trying to separate out of. The two rules cancel and the swerve never
-# executes.
-#
-# Reynolds gives separation strict priority for exactly this reason. While any
-# foreign agent (other squad's fans, or the other leader) is within
-# ENCOUNTER_RANGE, alignment and cohesion switch OFF for that fanboid and it
-# flies on separation + leader pull alone. Outside the encounter the full rule
-# is unchanged, so squadrons still form up before and after the pass.
-SEP_ONLY_ON_ENCOUNTER = True
-ENCOUNTER_RANGE = None   # None -> opts.VR, the range cohesion/alignment act
-                         # over anyway. Set a number to decouple the two.
-
 FAN_SPREAD = 3.0     # how loosely each squadron spawns around its leader
 CIRCLE_R   = 2.5     # radius of the drawn COLLISION circles
 # =====================================================================
@@ -242,6 +222,9 @@ def leaderRepulsion(xb, yb, xOthers, yOthers, opts, range_=None):
     return float(np.sum(w * ux)), float(np.sum(w * uy))
 
 
+_ROLLOUT = np.arange(1, STOP_LOOKAHEAD + 1)   # rebuilt once, not per call
+
+
 def canAvoid(x, y, th, xOther, yOther, thOther, opts):
     """Can this leader clear the other by turning as hard as he legally can?
 
@@ -263,7 +246,7 @@ def canAvoid(x, y, th, xOther, yOther, thOther, opts):
     cross = np.cos(th) * toY - np.sin(th) * toX
     turn = -np.sign(cross) * dpsiMax        # turn AWAY
 
-    n = np.arange(1, STOP_LOOKAHEAD + 1)
+    n = _ROLLOUT                            # hoisted; see module level
     thi = th + turn * n                     # my heading each step
     xi = x + np.cumsum(v * np.cos(thi) * dt)
     yi = y + np.cumsum(v * np.sin(thi) * dt)
@@ -321,6 +304,9 @@ def run(plot=True):
     fanX, fanY   = np.concatenate(fanX),  np.concatenate(fanY)
     fanVx, fanVy = np.concatenate(fanVx), np.concatenate(fanVy)
     squad = np.concatenate(squad)
+    # squad id for every column of the pairwise block: the fans, then the two
+    # leaders. Built once -- it never changes.
+    teamAll = np.concatenate((squad, np.array([0, 1])))
 
     dt, v = opts.dt, opts.v
     log = {'x': [[], []], 'y': [[], []], 'fanX': [], 'fanY': []}
@@ -389,64 +375,40 @@ def run(plot=True):
                 stoppedFlag[k] = False
 
         # ------------------------- FANBOIDS -------------------------
-        # VECTORISED over all fanboids at once. The rules are identical to the
-        # old per-boid loop (stock Reynolds: same-squad-and-visible for
-        # cohesion/alignment, everyone-within-PR for separation) -- only the
-        # execution changed. The loop version called boidsRules, fanSeparation
-        # and four np.appends per boid per step, i.e. ~800k numpy calls on
-        # 4-to-8-element arrays over a full run. NumPy costs ~1us per call
-        # regardless of size, so nearly all the runtime was dispatch overhead
-        # rather than arithmetic.
+        # Same rules as before, computed as ONE (n x n+2) pairwise block
+        # instead of a Python loop. The old version called np.append six times
+        # per fan per step; every one of those allocated a fresh array, and at
+        # 8-element arrays NumPy's per-call overhead completely dominated the
+        # arithmetic. Six boids cost 11.6 MILLION function calls per run.
+        allX  = np.concatenate((fanX,  X))
+        allY  = np.concatenate((fanY,  Y))
+        allVx = np.concatenate((fanVx, v * np.cos(TH)))
+        allVy = np.concatenate((fanVy, v * np.sin(TH)))
 
-        # Every agent a fanboid can perceive: all fanboids, then both leaders.
-        # esquad tags each column with its squadron so "same squad" is a mask.
-        lvx, lvy = v * np.cos(TH), v * np.sin(TH)
-        eX   = np.concatenate([fanX,  X])
-        eY   = np.concatenate([fanY,  Y])
-        eVx  = np.concatenate([fanVx, lvx])
-        eVy  = np.concatenate([fanVy, lvy])
-        esquad = np.concatenate([squad, np.array([0, 1])])
-
-        # (nFan, nFan+2): row i = fanboid i's view of every agent j
-        dx = fanX[:, None] - eX[None, :]      # vector FROM j TO i
-        dy = fanY[:, None] - eY[None, :]
+        dx = fanX[:, None] - allX[None, :]
+        dy = fanY[:, None] - allY[None, :]
         D  = np.hypot(dx, dy)
 
         notSelf = D > 1e-9
-        same    = esquad[None, :] == squad[:, None]
+        # Separation sees EVERYONE: both squadrons and both leaders.
+        sep = notSelf & (D <= opts.PR)
+        # Cohesion and alignment see my OWN squadron plus my OWN leader. The
+        # team mask handles the leaders for free -- teamAll is 0 and 1 for
+        # them, so a fan matches its own captain and not the other one.
+        vis = notSelf & (D <= opts.VR) & (teamAll[None, :] == squad[:, None])
 
-        # --- separation: EVERYONE inside the protected range, both squads ---
-        prot = notSelf & (D <= opts.PR)
-        sX = np.sum(dx * prot, axis=1) * opts.SF
-        sY = np.sum(dy * prot, axis=1) * opts.SF
+        sX = opts.SF * (dx * sep).sum(1)
+        sY = opts.SF * (dy * sep).sum(1)
 
-        # --- cohesion + alignment: own squadron only, inside visual range ---
-        vis = notSelf & (D <= opts.VR) & same
-        cnt = vis.sum(axis=1)
-        safeCnt = np.where(cnt > 0, cnt, 1)            # avoid 0/0 on empty rows
-        xAvg = (eX[None, :] * vis).sum(axis=1) / safeCnt
-        yAvg = (eY[None, :] * vis).sum(axis=1) / safeCnt
-        vxAvg = (eVx[None, :] * vis).sum(axis=1) / safeCnt
-        vyAvg = (eVy[None, :] * vis).sum(axis=1) / safeCnt
+        cnt = vis.sum(1)
+        safe = np.where(cnt > 0, cnt, 1)            # avoid 0/0; masked out below
+        seen = cnt > 0
+        cX = np.where(seen, ((allX  * vis).sum(1) / safe - fanX)  * opts.CF, 0.0)
+        cY = np.where(seen, ((allY  * vis).sum(1) / safe - fanY)  * opts.CF, 0.0)
+        aX = np.where(seen, ((allVx * vis).sum(1) / safe - fanVx) * opts.AF, 0.0)
+        aY = np.where(seen, ((allVy * vis).sum(1) / safe - fanVy) * opts.AF, 0.0)
 
-        cX = (xAvg - fanX) * opts.CF
-        cY = (yAvg - fanY) * opts.CF
-        aX = (vxAvg - fanVx) * opts.AF
-        aY = (vyAvg - fanVy) * opts.AF
-
-        seen = cnt > 0                                 # nobody in sight -> 0
-        cX, cY = cX * seen, cY * seen
-        aX, aY = aX * seen, aY * seen
-
-        # --- separation-only while a foreign agent is close ---
-        if SEP_ONLY_ON_ENCOUNTER:
-            encR = opts.VR if ENCOUNTER_RANGE is None else ENCOUNTER_RANGE
-            engaged = (notSelf & ~same & (D <= encR)).any(axis=1)
-            flock = ~engaged
-            cX, cY = cX * flock, cY * flock
-            aX, aY = aX * flock, aY * flock
-
-        # --- pull toward MY leader only ---
+        # pull toward MY leader only
         lX = (X[squad] - fanX) * opts.fanLeaderFactor
         lY = (Y[squad] - fanY) * opts.fanLeaderFactor
 
@@ -571,7 +533,7 @@ def collisions(radius=None):
     return collision_report(agents, radius, dt=r['opts'].dt)
 
 
-def animate(frameSkip=25, tail=400, save=None):
+def animate(frameSkip=50, tail=400, save=None):
     """Run the sim, then play it back using the shared animation utility."""
     from grainframe.animate import tracks_from_arrays, animate_tracks
 

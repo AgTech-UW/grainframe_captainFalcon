@@ -30,6 +30,11 @@ from grainframe.data_io import apply_dataset
 from grainframe.paths import straightPath
 from grainframe.dynamics import (falconSteering, ackermannClamp,
                                  WaypointTracker)
+from grainframe.guidance import (guidanceWaypoint, guidanceVectorField,
+                                 crossTrackError)
+from grainframe.avoidance import separationFlat, repulsionKhatib
+from grainframe.deadlock import canAvoid, yieldDecision
+from grainframe.flocking import flockStep
 
 
 # =====================================================================
@@ -97,8 +102,8 @@ LEADER_FACTOR_GOLD = 1.0
 # Per-leader protected range: how early each leader reacts to the OTHER.
 # Different values break the mirror symmetry -- the one with the bigger range
 # gives way, the one with the smaller range mostly holds his line.
-PR_RED  = 12.0
-PR_GOLD = 4.0
+PR_RED  = 10.0
+PR_GOLD = 10.0
 
 # True  -- Khatib form. Force is zero at the range boundary and rises steeply
 #          toward contact. Smooth, no discontinuity.
@@ -132,6 +137,36 @@ STOP_LOOKAHEAD = 3200   # steps to roll forward when testing feasibility.
                         # "am I inside STOP_MARGIN right now".
 STOP_MARGIN    = 1.5    # stop if the best-case future gap stays below this
 
+# WHO YIELDS. Deadlock cannot be resolved by symmetric reactive rules alone
+# without some global information (Duhaut et al. 2007); the standard fix is a
+# priority rule, because the alternative -- analysing the deadlock equilibrium
+# directly -- scales roughly exponentially in the number of agents (Grover,
+# Liu & Sycara, IJRR 42(6), 2023). So each leader carries a static rank.
+#
+# LOWER number = STAND-ON (holds course and speed, COLREGs Rule 17).
+# HIGHER number = GIVE-WAY (yields first, COLREGs Rule 16).
+# Written as a list indexed by leader so adding a third squadron is just a
+# third entry -- nothing below is hard-coded to two ranks.
+LEADER_PRIORITY = [0, 1]        # Red stands on, Gold gives way
+
+# COLREGs Rule 17(b): if the give-way vessel's action alone cannot prevent the
+# collision, the stand-on vessel must also act.
+#
+# OFF BY DEFAULT, and the reason is instructive. Rule 17(b) says the stand-on
+# vessel takes "such action as will best aid to avoid collision" -- in a
+# head-on that means TURN, not stop. Implemented below as a freeze (the only
+# escalation currently available), it produces permanent gridlock: once the
+# give-way leader halts, he becomes a stationary obstacle dead ahead, which
+# never stops being infeasible, so the stand-on leader freezes too and neither
+# recovers. Measured at PR_RED = PR_GOLD = 3.0: both leaders frozen for ~11000
+# steps, zero cross-track, neither reaches its goal.
+#
+# The correct escalation is a hard turn (bypass the bang-bang deadband and
+# command max rate away from the threat), which is a change to the steering
+# path rather than to this flag. Until that exists, leaving this False gives a
+# clean one-sided yield.
+USE_RULE_17B = False
+
 # ---------------------------------------------------------------------
 #  RULE PRIORITY DURING AN ENCOUNTER
 # ---------------------------------------------------------------------
@@ -164,113 +199,32 @@ RED, GOLD = 'crimson', 'goldenrod'
 # ---------------------------------------------------------------------
 
 def guidance(x, y, segA, segB, wpX, wpY, gain):
-    """Desired velocity vector for a leader at (x, y).
+    """Dispatch to the configured guidance law (grainframe.guidance).
 
-    segA -> segB is the path segment currently being tracked.
-    wpX, wpY is the active waypoint (only used by the 'waypoint' mode).
+    Thin wrapper: it exists only to bind this experiment's PARAMETERS block to
+    the shared implementation, so the knobs stay visible at the top of this
+    file while the law itself is shared and testable.
     """
     if GUIDANCE == 'waypoint':
-        return (wpX - x) * gain, (wpY - y) * gain
-
-    # --- vector field ---
-    seg = segB - segA
-    L = np.linalg.norm(seg)
-    if L < 1e-9:
-        return (wpX - x) * gain, (wpY - y) * gain
-
-    u = seg / L                              # along-track unit vector
-    n = np.array([-u[1], u[0]])              # left normal
-    e = (x - segA[0]) * n[0] + (y - segA[1]) * n[1]   # signed cross-track error
-
-    chiPath = np.arctan2(u[1], u[0])
-    # Far off the line (|e| large) atan saturates and chiD = chiPath -+ CHI_INF.
-    # On the line (e = 0) atan is 0 and chiD = chiPath exactly.
-    chiD = chiPath - CHI_INF * (2.0 / np.pi) * np.arctan(K_CROSS * e)
-
-    return GUID_MAG * gain * np.cos(chiD), GUID_MAG * gain * np.sin(chiD)
-
-
-# ---------------------------------------------------------------------
-#  Repulsion
-# ---------------------------------------------------------------------
-
-def fanSeparation(xb, yb, xOthers, yOthers, opts, range_=None):
-    """STOCK Reynolds/SAC separation -- used by the FANBOIDS. Do not change.
-
-    This is part of the boids model being studied, so it stays exactly as it
-    was: a flat push proportional to displacement, cut off at the protected
-    range. Note this is the same family of object as the Khatib potential
-    below -- both are repulsive artificial potential fields -- they just have
-    different distance profiles. Keeping them separate means a change to the
-    leader controller cannot silently alter the swarm results.
-    """
-    if range_ is None:
-        range_ = opts.PR
-    dx = xb - xOthers
-    dy = yb - yOthers
-    D = np.hypot(dx, dy)
-    tooClose = (D > 1e-9) & (D <= range_)
-    return (float(np.sum(dx[tooClose]) * opts.SF),
-            float(np.sum(dy[tooClose]) * opts.SF))
+        return guidanceWaypoint(x, y, wpX, wpY, gain)
+    out = guidanceVectorField(x, y, segA, segB, gain,
+                              kCross=K_CROSS, chiInf=CHI_INF,
+                              magnitude=GUID_MAG)
+    if out is None:                       # degenerate segment
+        return guidanceWaypoint(x, y, wpX, wpY, gain)
+    return out
 
 
 def leaderRepulsion(xb, yb, xOthers, yOthers, opts, range_=None):
-    """Leader-vs-leader repulsion ONLY. Not used by the fanboids.
-
-    Khatib (1986):  F = eta * (1/d - 1/range) / d^2, directed away.
-    Zero at d = range, singular at d = 0. eta is scaled so that REP_GAIN is
-    literally the force magnitude at d = range/2.
-    """
+    """Leader-vs-leader repulsion. Khatib when SMOOTH_REPULSION, else the
+    legacy flat rule, so the paper can report the cost of each."""
     if range_ is None:
         range_ = opts.PR
-
-    dx = xb - xOthers
-    dy = yb - yOthers
-    D = np.hypot(dx, dy)
-    tooClose = (D > 1e-9) & (D <= range_)
-    if not np.any(tooClose):
-        return 0.0, 0.0
-
-    if not SMOOTH_REPULSION:                      # legacy flat rule
-        return (float(np.sum(dx[tooClose]) * opts.SF),
-                float(np.sum(dy[tooClose]) * opts.SF))
-
-    d = np.clip(D[tooClose], 0.25, None)          # clip so it stays finite
-    eta = REP_GAIN * range_ ** 3 / 4.0
-    w = eta * (1.0 / d - 1.0 / range_) / d ** 2   # magnitude
-    ux, uy = dx[tooClose] / d, dy[tooClose] / d   # unit vector, away from them
-    return float(np.sum(w * ux)), float(np.sum(w * uy))
-
-
-def canAvoid(x, y, th, xOther, yOther, thOther, opts):
-    """Can this leader clear the other by turning as hard as he legally can?
-
-    Roll both forward STOP_LOOKAHEAD steps: the other holds heading, I turn at
-    my maximum rate (v/R) in whichever direction opens the gap. If even that
-    best case stays closer than STOP_MARGIN, no feasible avoidance exists and
-    the caller should STOP.
-
-    Vectorised: the whole rollout is closed-form under a constant turn rate,
-    so it is one cumsum instead of a Python loop. Same answer, ~100x faster,
-    which matters because STOP_LOOKAHEAD has to be a real horizon (thousands
-    of steps) to mean anything.
-    """
-    dt, v, R = opts.dt, opts.v, opts.R
-    dpsiMax = (v / R) * dt                  # most I can rotate per step
-
-    # Which way opens the gap? Sign of cross(heading, toward-other).
-    toX, toY = xOther - x, yOther - y
-    cross = np.cos(th) * toY - np.sin(th) * toX
-    turn = -np.sign(cross) * dpsiMax        # turn AWAY
-
-    n = np.arange(1, STOP_LOOKAHEAD + 1)
-    thi = th + turn * n                     # my heading each step
-    xi = x + np.cumsum(v * np.cos(thi) * dt)
-    yi = y + np.cumsum(v * np.sin(thi) * dt)
-    xo = xOther + v * np.cos(thOther) * dt * n   # he just keeps going straight
-    yo = yOther + v * np.sin(thOther) * dt * n
-
-    return float(np.min(np.hypot(xi - xo, yi - yo))) >= STOP_MARGIN
+    if SMOOTH_REPULSION:
+        return repulsionKhatib(xb, yb, xOthers, yOthers,
+                               range_=range_, gain=REP_GAIN)
+    return separationFlat(xb, yb, xOthers, yOthers,
+                          strength=opts.SF, range_=range_)
 
 
 def makePaths():
@@ -330,6 +284,14 @@ def run(plot=True):
     while t <= tMax and not all(done):
 
         # ------------------------- LEADERS -------------------------
+        # Snapshot the freeze flags BEFORE anyone decides. The old code read
+        # stoppedFlag[other] while the same list was being written inside the
+        # loop, so leader 0 saw leader 1's flag from the PREVIOUS step while
+        # leader 1 saw leader 0's flag from THIS step. Loop index silently
+        # acted as the priority rule. Now every leader decides from the same
+        # snapshot and the ranking below is the only tiebreak.
+        prevStopped = list(stoppedFlag)
+        newStopped = [False] * 2
         newLead = []
         for k in range(2):
             if done[k]:
@@ -369,95 +331,42 @@ def run(plot=True):
 
             distOther = np.hypot(X[other] - X[k], Y[other] - Y[k])
 
-            # DEADLOCK GUARD: if the other leader is already frozen he is not
-            # closing on me, so freezing too would lock us both forever with
-            # the gap constant and canAvoid() never able to recover. Only one
-            # of us needs to yield.
-            mustStop = (USE_INFEASIBILITY_STOP
-                        and distOther < STOP_RANGE
-                        and not stoppedFlag[other]
-                        and not canAvoid(X[k], Y[k], TH[k],
-                                         X[other], Y[other], TH[other], opts))
+            # DEADLOCK GUARD, priority-based (COLREGs Rules 16/17).
+            mustStop = False
+            if USE_INFEASIBILITY_STOP and distOther < STOP_RANGE:
+                # An already-frozen leader is a stationary obstacle, not one
+                # closing at speed v. Telling canAvoid() that is what lets the
+                # stand-on leader steer past instead of freezing in sympathy.
+                vOther = 0.0 if prevStopped[other] else v
+                trapped = not canAvoid(X[k], Y[k], TH[k],
+                                       X[other], Y[other], TH[other], opts,
+                                       lookahead=STOP_LOOKAHEAD,
+                                       margin=STOP_MARGIN, vOther=vOther)
+                mustStop = yieldDecision(k, other, trapped,
+                                         priority=LEADER_PRIORITY,
+                                         prevStopped=prevStopped,
+                                         useRule17b=USE_RULE_17B)
 
             if mustStop:
                 newLead.append((X[k], Y[k], TH[k]))          # hold position
-                stoppedFlag[k] = True
+                newStopped[k] = True
             else:
                 newLead.append((X[k] + v * np.cos(TH[k]) * dt,
                                 Y[k] + v * np.sin(TH[k]) * dt,
                                 TH[k] + vTh * dt))
-                stoppedFlag[k] = False
 
         # ------------------------- FANBOIDS -------------------------
-        # VECTORISED over all fanboids at once. The rules are identical to the
-        # old per-boid loop (stock Reynolds: same-squad-and-visible for
-        # cohesion/alignment, everyone-within-PR for separation) -- only the
-        # execution changed. The loop version called boidsRules, fanSeparation
-        # and four np.appends per boid per step, i.e. ~800k numpy calls on
-        # 4-to-8-element arrays over a full run. NumPy costs ~1us per call
-        # regardless of size, so nearly all the runtime was dispatch overhead
-        # rather than arithmetic.
-
-        # Every agent a fanboid can perceive: all fanboids, then both leaders.
-        # esquad tags each column with its squadron so "same squad" is a mask.
-        lvx, lvy = v * np.cos(TH), v * np.sin(TH)
-        eX   = np.concatenate([fanX,  X])
-        eY   = np.concatenate([fanY,  Y])
-        eVx  = np.concatenate([fanVx, lvx])
-        eVy  = np.concatenate([fanVy, lvy])
-        esquad = np.concatenate([squad, np.array([0, 1])])
-
-        # (nFan, nFan+2): row i = fanboid i's view of every agent j
-        dx = fanX[:, None] - eX[None, :]      # vector FROM j TO i
-        dy = fanY[:, None] - eY[None, :]
-        D  = np.hypot(dx, dy)
-
-        notSelf = D > 1e-9
-        same    = esquad[None, :] == squad[:, None]
-
-        # --- separation: EVERYONE inside the protected range, both squads ---
-        prot = notSelf & (D <= opts.PR)
-        sX = np.sum(dx * prot, axis=1) * opts.SF
-        sY = np.sum(dy * prot, axis=1) * opts.SF
-
-        # --- cohesion + alignment: own squadron only, inside visual range ---
-        vis = notSelf & (D <= opts.VR) & same
-        cnt = vis.sum(axis=1)
-        safeCnt = np.where(cnt > 0, cnt, 1)            # avoid 0/0 on empty rows
-        xAvg = (eX[None, :] * vis).sum(axis=1) / safeCnt
-        yAvg = (eY[None, :] * vis).sum(axis=1) / safeCnt
-        vxAvg = (eVx[None, :] * vis).sum(axis=1) / safeCnt
-        vyAvg = (eVy[None, :] * vis).sum(axis=1) / safeCnt
-
-        cX = (xAvg - fanX) * opts.CF
-        cY = (yAvg - fanY) * opts.CF
-        aX = (vxAvg - fanVx) * opts.AF
-        aY = (vyAvg - fanVy) * opts.AF
-
-        seen = cnt > 0                                 # nobody in sight -> 0
-        cX, cY = cX * seen, cY * seen
-        aX, aY = aX * seen, aY * seen
-
-        # --- separation-only while a foreign agent is close ---
-        if SEP_ONLY_ON_ENCOUNTER:
-            encR = opts.VR if ENCOUNTER_RANGE is None else ENCOUNTER_RANGE
-            engaged = (notSelf & ~same & (D <= encR)).any(axis=1)
-            flock = ~engaged
-            cX, cY = cX * flock, cY * flock
-            aX, aY = aX * flock, aY * flock
-
-        # --- pull toward MY leader only ---
-        lX = (X[squad] - fanX) * opts.fanLeaderFactor
-        lY = (Y[squad] - fanY) * opts.fanLeaderFactor
-
-        vxDes = fanVx + (sX + aX + cX + lX) * dt
-        vyDes = fanVy + (sY + aY + cY + lY) * dt
+        vxDes, vyDes = flockStep(fanX, fanY, fanVx, fanVy, squad,
+                                 X, Y, TH, opts,
+                                 sepOnlyOnEncounter=SEP_ONLY_ON_ENCOUNTER,
+                                 encounterRange=ENCOUNTER_RANGE)
 
         fanVx, fanVy, _ = ackermannClamp(fanVx, fanVy, vxDes, vyDes, opts)
         fanX = fanX + fanVx * dt
         fanY = fanY + fanVy * dt
 
         # ------------------------- commit + log -------------------------
+        stoppedFlag = newStopped
         for k in range(2):
             X[k], Y[k], TH[k] = newLead[k]
             if stoppedFlag[k]:
@@ -486,10 +395,7 @@ def run(plot=True):
     # This is the number the guidance law is supposed to improve.
     for k, (name, xs, ys, d) in enumerate([('Red', xR, yR, dataR),
                                            ('Gold', xG, yG, dataG)]):
-        a = d.refPath[0]
-        u = (d.refPath[-1] - a) / np.linalg.norm(d.refPath[-1] - a)
-        n = np.array([-u[1], u[0]])
-        e = (xs - a[0]) * n[0] + (ys - a[1]) * n[1]
+        e = crossTrackError(xs, ys, d.refPath)
         print('  %-5s cross-track: peak %.2f, RMS %.2f' % (name, np.abs(e).max(),
                                                            np.sqrt(np.mean(e ** 2))))
 
@@ -571,11 +477,35 @@ def collisions(radius=None):
     return collision_report(agents, radius, dt=r['opts'].dt)
 
 
-def animate(frameSkip=25, tail=400, save=None):
-    """Run the sim, then play it back using the shared animation utility."""
+_CACHE = {}
+
+
+def animate(frameSkip=50, tail=400, save=None, fps=30, reuse=False):
+    """Play back the sim.
+
+    The simulation is fully computed BEFORE playback starts -- but the frames
+    are not. FuncAnimation calls update() live and matplotlib redraws each
+    frame on demand, so playback speed is bounded by rendering, not by the
+    sim. Three knobs, in order of effect:
+
+      blit      (in animate_tracks) 19.5 -> 3.0 ms/frame. Biggest single win.
+      fps       sets interval = 1000//fps, a hard floor on frame time. At the
+                old fps=20 that was a 50 ms pause per frame no matter how fast
+                the render was.
+      frameSkip how many sim steps each frame advances. 8391 steps at the old
+                frameSkip=25 is 336 frames; at 60 it is 140, and you cannot
+                see the difference at playback speed.
+
+    reuse: keep the finished run in memory so replaying does not re-simulate.
+    Set False after changing any parameter, or the old run will be replayed.
+    """
     from grainframe.animate import tracks_from_arrays, animate_tracks
 
-    r = run(plot=False)
+    if reuse and 'r' in _CACHE:
+        r = _CACHE['r']
+    else:
+        r = run(plot=False)
+        _CACHE['r'] = r
     log, squad = r['log'], r['squad']
     fx = np.array(log['fanX'])
     fy = np.array(log['fanY'])
@@ -594,7 +524,8 @@ def animate(frameSkip=25, tail=400, save=None):
                                 leaderLabels=['Red Leader', 'Gold Leader'])
     return animate_tracks(tracks, dt=dt, frameSkip=frameSkip, tail=tail,
                           title='Two squads, %s (seed %d)' % (GEOMETRY, SEED),
-                          subtitleFn=subtitle, refPaths=refs, save=save)
+                          subtitleFn=subtitle, refPaths=refs, save=save,
+                          fps=fps)
 
 
 def compare():
