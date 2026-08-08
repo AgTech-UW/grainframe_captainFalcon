@@ -1,0 +1,31 @@
+{
+  "BRAKE_FLOOR": 0.0,
+  "BRAKE_RANGE": 3.0,
+  "BRAKE_STOP": 1.4,
+  "CORR_GAIN": 60.0,
+  "CORR_HALF": 4.5,
+  "CORR_RANGE": 12.0,
+  "HALF": 40.0,
+  "OVERRIDES": {
+    "PR": 20.0,
+    "VR": 20.0
+  },
+  "PR_GOLD": 10.0,
+  "PR_RED": 12.0,
+  "REP_GAIN": 45.0,
+  "SEP_ONLY_ON_ENCOUNTER": true,
+  "SLOT_MIN_R": 20.0,
+  "SLOT_SHAPE": "vee",
+  "SLOT_SPACING": 25.0,
+  "SPAWN_ARC": 1.0471975511965976,
+  "SPAWN_MAX_R": 18.0,
+  "SPAWN_MIN_R": 8.0,
+  "SPAWN_MIN_SEP": 20.0,
+  "SPAWN_MODE": "random",
+  "USE_CORRIDOR": true,
+  "USE_FAN_BRAKE": true,
+  "USE_GLOBAL_PRIORITY": true,
+  "USE_INFEASIBILITY_STOP": true,
+  "USE_RULE_17B": false,
+  "USE_SLOTS": true
+}
