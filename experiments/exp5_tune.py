@@ -375,6 +375,11 @@ def grid(sizes, prValues, ratios, nSeeds, geometry, guidance, dryRun=False,
     with f:
         for i, (n, pr, ratio, s) in enumerate(jobs, 1):
             spacing = pr * ratio
+            # PR and VR are SimOptions fields; SLOT_SPACING, SPAWN_MIN_SEP
+            # and SLOT_MIN_R are module globals. runOne routes each to the
+            # right place. Before that routing existed the PR and VR entries
+            # were silently dropped, so any grid run predating the fix varied
+            # only the three module-level values.
             ov = {'PR': pr, 'VR': max(8.0, pr),
                   'SLOT_SPACING': spacing, 'SPAWN_MIN_SEP': spacing,
                   'SLOT_MIN_R': max(8.0, pr)}

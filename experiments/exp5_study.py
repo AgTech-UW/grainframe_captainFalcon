@@ -89,7 +89,9 @@ PROVENANCE = ['SPAWN_MODE', 'SPAWN_MIN_R', 'SPAWN_MAX_R', 'SPAWN_MIN_SEP',
               'USE_CORRIDOR', 'CORR_RANGE', 'CORR_HALF', 'CORR_GAIN',
               'USE_SLOTS', 'USE_GLOBAL_PRIORITY', 'SEP_ONLY_ON_ENCOUNTER',
               'PR_RED', 'PR_GOLD', 'REP_GAIN', 'HALF',
-              'USE_INFEASIBILITY_STOP', 'USE_RULE_17B']
+              'USE_INFEASIBILITY_STOP', 'USE_RULE_17B',
+              'SLOT_PULL_CAP', 'FAN_SWIRL', 'FAN_SWIRL_HEADON_ONLY',
+              'SLOT_SHAPE', 'SLOT_SWEEP', 'GEOMETRY_LANE_OFFSET']
 
 FIELDS = ['geometry', 'guidance', 'nFan', 'seed', 'status', 'configHash',
           'leaderLeader', 'fanOwnCap', 'fanForeignCap',
@@ -112,6 +114,18 @@ def captureConfig(m):
             v = getattr(m, k)
             cfg[k] = float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
     cfg['OVERRIDES'] = dict(getattr(m, 'OVERRIDES', {}) or {})
+
+    # Record the SimOptions fields that actually govern the physics. These
+    # live in the shared config.py, so a change there would otherwise leave
+    # the config hash unmoved and two incomparable sweeps would look
+    # identical -- which has already caught us once.
+    try:
+        from grainframe.config import SimOptions
+        probe = SimOptions()
+        for k, v in vars(probe).items():
+            cfg['opts.' + k] = cfg['OVERRIDES'].get(k, v)
+    except Exception:
+        pass
     return cfg
 
 
@@ -144,8 +158,38 @@ def runOne(geometry, guidance, nFan, seed, overrides=None):
     m.N_FAN = nFan
     m.SEED = seed
     if overrides:
+        # Overrides land in one of TWO places and it matters which.
+        #
+        #   module globals  -- SLOT_SPACING, BRAKE_RANGE, SPAWN_ARC, ...
+        #                      read directly by run() in the experiment file.
+        #   SimOptions      -- PR, VR, SF, CF, AF, fanLeaderFactor, ...
+        #                      read from `opts` inside the physics functions.
+        #
+        # setattr(m, 'SF', 20) creates a module attribute that NOTHING reads,
+        # so the run proceeds with the original value and the sweep silently
+        # reports identical results for every value tried. That is exactly
+        # what happened to an earlier sensitivity sweep. Route by inspecting
+        # SimOptions for the field name, and fail loudly on anything that
+        # matches neither, since a silently ignored override is worse than a
+        # crash.
+        from grainframe.config import SimOptions
+        probe = SimOptions()
+        optFields = set(vars(probe).keys())
+
         for k, v in overrides.items():
-            setattr(m, k, v)
+            if k in optFields:
+                # merge into the experiment's own OVERRIDES dict, which run()
+                # applies to opts after the dataset is loaded
+                m.OVERRIDES = dict(getattr(m, 'OVERRIDES', {}) or {})
+                m.OVERRIDES[k] = v
+            elif hasattr(m, k):
+                setattr(m, k, v)
+            else:
+                raise KeyError(
+                    'override %r matches neither a SimOptions field nor a '
+                    'module-level parameter of the experiment. Check the '
+                    'spelling: silently ignoring it would produce a sweep in '
+                    'which every value gives the same answer.' % k)
 
     import io
     import contextlib
