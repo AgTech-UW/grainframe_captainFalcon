@@ -66,10 +66,9 @@ OVERRIDES = {
     # 'AF': 2.0,              # fanboid alignment
     # 'fanLeaderFactor': 1.0, # fanboid pull toward own leader
     # 'R': 5.0,               # leader turn radius (bigger = clumsier)
-    'PR': 16.0,
-    'VR': 16.0,
+    'PR': 20.0,
+    'VR': 20.0,
 }
-
 # ---------------------------------------------------------------------
 #  GUIDANCE: how each leader follows his own path
 # ---------------------------------------------------------------------
@@ -266,7 +265,7 @@ CORR_GAIN   = 60.0
 #     on a single point they are all also required to avoid. Distinct slots
 #     are separated by construction.
 USE_SLOTS   = True
-SLOT_SPACING = 20.0      # MUST exceed opts.PR (5.0) or the formation is
+SLOT_SPACING = 25.0      # MUST exceed opts.PR (5.0) or the formation is
                         # self-repelling: separation fights the slot pull and
                         # the formation cannot hold. Measured at 3.0 the slots
                         # made collisions WORSE than no slots at all.
@@ -280,7 +279,7 @@ SLOT_SHAPE   = 'vee'    # 'column' | 'vee' | 'echelon'.
                         # lane, vee and echelon place none.
 SLOT_SWEEP   = np.deg2rad(45.0)   # angle back from abeam for vee/echelon.
                                   # Smaller = wider flatter V.
-SLOT_MIN_R   = 8.0      # every wingman starts at least this far from its
+SLOT_MIN_R   = 20.0      # every wingman starts at least this far from its
                         # captain, so nobody begins inside a protected range
 
 # Deterministic spawn. On a real field the start and end states are known --
@@ -310,7 +309,7 @@ SPAWN_MIN_R  = 8.0      # inner radius: keeps everyone outside the captain's
 SPAWN_MAX_R  = 18.0     # outer radius of the spawn band
 SPAWN_ARC    = np.deg2rad(60.0)   # half-width of the rear sector.
                                   # 90 deg = the whole rear hemisphere.
-SPAWN_MIN_SEP = 13.0     # minimum gap between wingmen at spawn. Keep above
+SPAWN_MIN_SEP = 20.0     # minimum gap between wingmen at spawn. Keep above
                         # opts.PR (5.0) or they start inside each other's
                         # protected range and spend the opening seconds
                         # unpiling instead of forming up.
