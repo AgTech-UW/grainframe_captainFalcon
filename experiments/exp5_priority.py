@@ -573,7 +573,12 @@ def run(plot=True):
     results = {'log': log, 'squad': squad, 'dataR': dataR, 'dataG': dataG,
                'opts': opts, 'dLeaders': dLeaders, 'circles': circles,
                'xR': xR, 'yR': yR, 'xG': xG, 'yG': yG,
-               'stopCount': stopCount}
+               'stopCount': stopCount,
+               # Whether each leader reached the end of its reference path
+               # within tMax. A run with no collisions and done == False is a
+               # deadlock outcome, not a success: collision counts alone
+               # cannot tell the two apart, which is the Grover point.
+               'done': list(done)}
     if not plot:
         return results
 

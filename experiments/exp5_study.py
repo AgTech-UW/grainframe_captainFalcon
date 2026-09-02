@@ -98,7 +98,7 @@ FIELDS = ['geometry', 'guidance', 'nFan', 'seed', 'status', 'configHash',
           'fanFanSame', 'fanFanCross', 'totalCollisions',
           'minLeaderGap', 'minFanCapGap', 'minFanFanGap',
           'redRMS', 'goldRMS', 'redPeak', 'goldPeak',
-          'stopsRed', 'stopsGold', 'steps', 'firstCollisionRelCPA',
+          'stopsRed', 'stopsGold', 'steps', 'redArrived', 'goldArrived', 'firstCollisionRelCPA',
           'runtimeSec']
 
 
@@ -270,6 +270,12 @@ def analyse(r):
     row['stopsRed'] = r['stopCount'][0]
     row['stopsGold'] = r['stopCount'][1]
     row['steps'] = len(dLead)
+    # Arrival: did each leader finish its path within tMax. Recorded so that
+    # collision-free can be distinguished from deadlocked. Blank on results
+    # produced before run() returned 'done'.
+    dn = r.get('done')
+    row['redArrived'] = int(bool(dn[0])) if dn is not None else ''
+    row['goldArrived'] = int(bool(dn[1])) if dn is not None else ''
 
     from grainframe.guidance import crossTrackError
     for name, xs, ys, data in [('red', r['xR'], r['yR'], r['dataR']),

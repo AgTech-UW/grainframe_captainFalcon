@@ -173,7 +173,7 @@ FIELDS = ['mode', 'param', 'value', 'label', 'split', 'nFan', 'seed',
           'totalCollisions', 'fanOwnCap', 'fanForeignCap',
           'fanFanSame', 'fanFanCross', 'leaderLeader',
           'minFanFanGap', 'minFanCapGap', 'minLeaderGap',
-          'redRMS', 'goldRMS',
+          'redRMS', 'goldRMS', 'redArrived', 'goldArrived',
           # WHEN the first collision happened, in seconds relative to the
           # leaders' closest approach. Negative = on the approach, positive =
           # on the way out, near zero = at the encounter itself. This is what

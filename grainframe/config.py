@@ -11,6 +11,12 @@ class SimOptions:
     CF: float = 0.8          # Cohesion factor (pull to group center)
     SF: float = 10.0          # Separation factor (push away from close neighbors)
     AF: float = 2.0          # Alignment factor (match group speed/heading)
+    # Separation force profile. 'flat' is the published form, magnitude
+    # growing with distance up to PR and vanishing at contact. 'norm' is the
+    # Reynolds 1999 form, offset normalised and weighted 1/r, scaled so its
+    # magnitude at contact matches the flat profile's magnitude at the PR
+    # boundary. Same dynamic range, mirror-image profile.
+    SEP_PROFILE: str = 'flat'
     maxSpeed: float = 2.0
     minSpeed: float = 0.8
     safetyF: float = 5.0     # Margin from the walls

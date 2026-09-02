@@ -69,8 +69,21 @@ def flockStep(fanX, fanY, fanVx, fanVy, squad, leadX, leadY, leadTh, opts,
 
     # --- separation: EVERYONE inside the protected range, all squadrons ---
     prot = notSelf & (D <= opts.PR)
-    sepX = dx * prot
-    sepY = dy * prot
+    # Force profile. 'flat' is the published form, F = SF * d, largest just
+    # inside PR and vanishing at contact. 'norm' is the Reynolds 1999 form,
+    # offset normalised and weighted 1/r, so F ~ SF * PR / D. The PR factor
+    # scales it so the two profiles span the same magnitudes over (0, PR],
+    # mirror-imaged: flat runs from ~0 at contact up to SF*PR at the
+    # boundary, norm runs from SF*PR near contact down to SF at the
+    # boundary. The weight applies to the swirl below as well, so the
+    # rotated component keeps the same profile as the radial one.
+    if getattr(opts, 'SEP_PROFILE', 'flat') == 'norm':
+        Dsafe = np.where(D > 1e-9, D, 1e-9)
+        wgt = opts.PR / (Dsafe * Dsafe)
+    else:
+        wgt = 1.0
+    sepX = dx * wgt * prot
+    sepY = dy * wgt * prot
 
     # --- SWIRL: a shared handedness, applied per neighbour pair ---
     #
@@ -109,8 +122,8 @@ def flockStep(fanX, fanY, fanVx, fanVy, squad, leadX, leadY, leadTh, opts,
         use = prot & headOn
         # rotate 90 degrees in the world frame: (x, y) -> (-y, x). The sign
         # convention is checked on the canonical case in avoidance.swirl().
-        sepX = np.where(use, sepX + swirl * (-dy * prot), sepX)
-        sepY = np.where(use, sepY + swirl * (dx * prot), sepY)
+        sepX = np.where(use, sepX + swirl * (-dy * wgt * prot), sepX)
+        sepY = np.where(use, sepY + swirl * (dx * wgt * prot), sepY)
 
     sX = np.sum(sepX, axis=1) * opts.SF
     sY = np.sum(sepY, axis=1) * opts.SF

@@ -24,7 +24,7 @@ sys.path.insert(0, HERE)
 from exp5_tune import wilson
 
 OUTDIR = os.path.join(os.path.dirname(HERE), 'results')
-GRIDCSV = os.path.join(OUTDIR, 'exp5_grid.csv')
+GRIDCSV = os.path.join(OUTDIR, 'exp5_grid2_flatNS.csv')
 
 # autolayout OFF: it cannot cope with a colorbar spanning several axes, and
 # silently overlaps the last panel when it tries.
