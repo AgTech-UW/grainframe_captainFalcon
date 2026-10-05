@@ -5,10 +5,14 @@ from .dynamics import (boidsRules, fanLeaderRule, falconSteering,
                        initUniform, initClumped)
 
 
-def runSimulation(data, arena, opts, nDistract=0, nFan=0, seed=None):
+def runSimulation(data, arena, opts, nDistract=0, nFan=0, seed=None, slots=None):
     """Simulate Captain Falcon + boids on the given dataset/arena.
 
     Returns a dict of logged arrays, truncated to the CPA frame at the goal.
+
+    slots: optional (along, lat) arrays of length nFan, each fanboid's target
+    in the captain's body frame (along = forward, lat = left). None keeps the
+    original behaviour: every fanboid is pulled toward the captain himself.
     """
     if seed is None:
         seed = opts.seed
@@ -138,10 +142,18 @@ def runSimulation(data, arena, opts, nDistract=0, nFan=0, seed=None):
                 ky = fS_y + fA_y + fC_y
 
                 if isFan:
+                    # Target: the captain himself, or this fanboid's own slot
+                    if slots is None:
+                        tx, ty = xi, yi
+                    else:
+                        j = i - nDistract
+                        c, sn = np.cos(thetai), np.sin(thetai)
+                        tx = xi + c * slots[0][j] - sn * slots[1][j]
+                        ty = yi + sn * slots[0][j] + c * slots[1][j]
                     # Pass the positions AND the velocities into the new rule
                     kx4, ky4 = fanLeaderRule(
                         xAll[i], yAll[i], vxAll[i], vyAll[i], 
-                        xi, yi, vxCap, vyCap, opts
+                        tx, ty, vxCap, vyCap, opts
                     )
                     kx += kx4
                     ky += ky4

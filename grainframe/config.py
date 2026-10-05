@@ -44,6 +44,10 @@ class SimOptions:
 
     # ---- Fanboid parameters ----
     fanLeaderFactor: float = 1.0     # pull toward the captain
+    fanLeaderVelocityFactor: float = 0.0  # heading/velocity match to the captain.
+                                     # Used in dynamics.fanLeaderRule but was never
+                                     # defined here, so fanboid runs crashed. 0.0 =
+                                     # position pull only (pre-velocity-term code).
     falconSeesFanboids: bool = False # keep captain unperturbed by default
     nFanShowcase: int = 10
     fanSweepN: tuple = (1, 2, 3, 5, 7, 12, 20)
